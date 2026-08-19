@@ -274,6 +274,22 @@ router.put('/packages/:id', requireStaff('billing'), (req, res) => {
   res.json({ ok: true });
 });
 
+// 刪除方案：已扣過次數或已產生收費單的方案不能刪（會對不上帳），改用狀態作廢
+router.delete('/packages/:id', requireStaff('billing'), (req, res) => {
+  const p = db.prepare('SELECT * FROM packages WHERE id = ?').get(req.params.id);
+  if (!p) return res.status(404).json({ error: '找不到此方案' });
+  if (p.sessions_used > 0) {
+    return res.status(400).json({ error: `此方案已使用 ${p.sessions_used} 次，不可刪除；請改將狀態設為已退費或到期` });
+  }
+  const inv = db.prepare('SELECT COUNT(*) n FROM invoices WHERE package_id = ?').get(p.id).n;
+  if (inv) return res.status(400).json({ error: `此方案已有 ${inv} 筆收費紀錄，不可刪除` });
+  const appt = db.prepare('SELECT COUNT(*) n FROM appointments WHERE package_id = ?').get(p.id).n;
+  if (appt) return res.status(400).json({ error: `此方案已綁定 ${appt} 筆預約，不可刪除` });
+  db.prepare('DELETE FROM packages WHERE id = ?').run(p.id);
+  audit('staff', req.user.id, req.user.name, '刪除方案', String(p.client_id), { name: p.name });
+  res.json({ ok: true });
+});
+
 // 該個案可用的方案（預約時扣次用）
 router.get('/clients/:id/active-packages', requireStaff('schedule'), (req, res) => {
   res.json(db.prepare(`SELECT *, (sessions_total - sessions_used) AS remaining FROM packages

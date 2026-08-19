@@ -164,7 +164,8 @@ App.page('risk', {
           <td>${UI.tag(TW.event_status[r.status], r.status === 'open' ? 'warn' : '')}</td>
           <td style="white-space:nowrap"><button class="btn tiny secondary" data-e="${r.id}">編輯</button>
             <button class="btn tiny secondary" data-form="${r.id}">通報表</button>
-            ${r.status === 'open' ? `<button class="btn tiny" data-close="${r.id}">結案</button>` : ''}</td></tr>`),
+            ${r.status === 'open' ? `<button class="btn tiny" data-close="${r.id}">結案</button>` : ''}
+            ${!r.reported ? `<button class="btn tiny danger" data-rdel="${r.id}">刪除</button>` : ''}</td></tr>`),
         '沒有符合條件的事件');
       el.querySelectorAll('[data-e]').forEach(b => {
         b.onclick = () => riskDialog(rows.find(r => r.id === Number(b.dataset.e)), draw);
@@ -172,6 +173,13 @@ App.page('risk', {
       // 通報表套印：把個案與事件欄位帶進表格，實際通報仍走主管機關管道
       el.querySelectorAll('[data-form]').forEach(b => {
         b.onclick = () => reportFormPrint(Number(b.dataset.form)).catch(e => UI.err(e));
+      });
+      // 已完成通報的事件不出現刪除鈕（後端也擋）；誤登的才刪
+      el.querySelectorAll('[data-rdel]').forEach(b => {
+        b.onclick = async () => {
+          if (!await UI.confirm('刪除這筆危機事件？誤登才用；已處理完畢請改用結案。')) return;
+          try { await DEL(`/risk-events/${b.dataset.rdel}`); UI.toast('已刪除'); draw(); } catch (e) { UI.err(e); }
+        };
       });
       el.querySelectorAll('[data-close]').forEach(b => {
         b.onclick = () => UI.modal({
@@ -644,12 +652,39 @@ App.page('packages', {
   async render(el) {
     const rows = await GET('/packages');
     el.innerHTML = `<div class="toolbar"><div class="spacer"></div><button class="btn" id="add">新增方案</button></div>
-      <div class="card">${UI.table(['個案', '方案', '總次數', '已用', '剩餘', '金額', '起訖', '狀態'],
+      <div class="card">${UI.table(['個案', '方案', '總次數', '已用', '剩餘', '金額', '起訖', '狀態', ''],
         rows.map(p => `<tr><td><a href="#client/${p.client_id}">${UI.esc(p.client_name)}（${p.client_code}）</a></td>
           <td>${UI.esc(p.name)}</td><td>${p.sessions_total}</td><td>${p.sessions_used}</td>
           <td><strong>${p.remaining}</strong></td><td>${UI.fmtMoney(p.amount)}</td>
           <td>${p.start_date} ~ ${p.expire_date || '不限'}</td>
-          <td>${UI.tag(TW.pkg_status[p.status] || p.status, p.status === 'active' ? 'ok' : '')}</td></tr>`), '尚無方案')}</div>`;
+          <td>${UI.tag(TW.pkg_status[p.status] || p.status, p.status === 'active' ? 'ok' : '')}</td>
+          <td style="white-space:nowrap"><button class="btn tiny secondary" data-pe="${p.id}">編輯</button>
+            <button class="btn tiny danger" data-pd="${p.id}">刪除</button></td></tr>`), '尚無方案')}
+        <div style="font-size:12.5px;color:var(--muted);margin-top:8px">
+          已扣過次數或已有收費、預約綁定的方案不可刪除，請改用狀態（退費／到期）處理。</div></div>`;
+    el.querySelectorAll('[data-pe]').forEach(b => {
+      const p = rows.find(x => x.id === Number(b.dataset.pe));
+      b.onclick = () => UI.modal({
+        title: `編輯方案：${p.client_name}`,
+        body: `<div class="form-grid">
+          ${UI.input('name', '方案名稱', { value: p.name })}
+          ${UI.input('sessions_total', '總次數', { type: 'number', value: p.sessions_total })}
+          ${UI.input('amount', '方案金額', { type: 'number', value: p.amount })}
+          ${UI.input('start_date', '起始日', { type: 'date', value: p.start_date })}
+          ${UI.input('expire_date', '到期日', { type: 'date', value: p.expire_date })}
+          ${UI.select('status', '狀態', App.enumOptions('pkg_status'), { value: p.status })}
+          ${UI.textarea('note', '備註', { value: p.note || '' })}</div>
+          <div style="font-size:12.5px;color:var(--muted);margin-top:8px">已使用 ${p.sessions_used} 次，總次數不可低於此數。</div>`,
+        onSubmit: async e => { await PUT(`/packages/${p.id}`, UI.formData(e)); UI.toast('已儲存'); App.go('packages'); }
+      });
+    });
+    el.querySelectorAll('[data-pd]').forEach(b => {
+      const p = rows.find(x => x.id === Number(b.dataset.pd));
+      b.onclick = async () => {
+        if (!await UI.confirm(`刪除「${p.client_name}」的「${p.name}」？`)) return;
+        try { await DEL(`/packages/${p.id}`); UI.toast('已刪除'); App.go('packages'); } catch (e) { UI.err(e); }
+      };
+    });
     el.querySelector('#add').onclick = async () => {
       const clients = await App.clientOptions(true);
       UI.modal({
@@ -715,16 +750,24 @@ App.page('announcements', {
         <td>${a.publish_date}</td><td>${a.pinned ? '📌 ' : ''}${UI.esc(a.title)}</td>
         <td>${({ all: '全部', staff: '所內', client: '個案' })[a.audience]}</td>
         <td>${UI.esc(a.author || '')}</td>
-        <td><button class="btn tiny danger" data-d="${a.id}">刪除</button></td></tr>`), '尚無公告')}</div>`;
+        <td style="white-space:nowrap"><button class="btn tiny secondary" data-e="${a.id}">編輯</button>
+          <button class="btn tiny danger" data-d="${a.id}">刪除</button></td></tr>`), '尚無公告')}</div>`;
+    const form = a => `<div class="form-grid">
+        ${UI.input('title', '標題', { value: a ? a.title : '', full: true })}
+        ${UI.select('audience', '對象', [['all', '全部'], ['staff', '所內人員'], ['client', '個案']], { value: a ? a.audience : 'all' })}
+        ${UI.input('publish_date', '發布日', { type: 'date', value: a ? a.publish_date : UI.today() })}
+        ${UI.checkbox('pinned', '置頂', a ? a.pinned : false)}
+        ${UI.textarea('content', '內容', { value: a ? a.content : '' })}</div>`;
     el.querySelector('#add').onclick = () => UI.modal({
-      title: '新增公告',
-      body: `<div class="form-grid">
-        ${UI.input('title', '標題', { full: true })}
-        ${UI.select('audience', '對象', [['all', '全部'], ['staff', '所內人員'], ['client', '個案']])}
-        ${UI.input('publish_date', '發布日', { type: 'date', value: UI.today() })}
-        ${UI.checkbox('pinned', '置頂', false)}
-        ${UI.textarea('content', '內容')}</div>`,
+      title: '新增公告', body: form(null),
       onSubmit: async e => { await POST('/announcements', UI.formData(e)); App.go('announcements'); }
+    });
+    el.querySelectorAll('[data-e]').forEach(b => {
+      const a = rows.find(x => x.id === Number(b.dataset.e));
+      b.onclick = () => UI.modal({
+        title: '編輯公告', body: form(a),
+        onSubmit: async e => { await PUT(`/announcements/${a.id}`, UI.formData(e)); App.go('announcements'); }
+      });
     });
     el.querySelectorAll('[data-d]').forEach(b => {
       b.onclick = async () => { if (await UI.confirm('刪除此公告？')) { await DEL(`/announcements/${b.dataset.d}`); App.go('announcements'); } };
@@ -895,8 +938,19 @@ App.page('users', {
         <td>${UI.esc(u.supervisor_name || '')}</td>
         <td>${u.role === 'admin' ? '全部' : u.permissions.length}</td>
         <td>${u.active ? UI.tag('啟用', 'ok') : UI.tag('停用')}</td>
-        <td><button class="btn tiny secondary" data-u="${u.id}">編輯</button></td></tr>`))}</div>`;
+        <td style="white-space:nowrap"><button class="btn tiny secondary" data-u="${u.id}">編輯</button>
+          <button class="btn tiny danger" data-ud="${u.id}">刪除</button></td></tr>`))}</div>
+      <div style="font-size:12.5px;color:var(--muted);margin-top:8px">
+        已有預約、晤談紀錄、主責個案或報酬單的帳號不會真的刪除，會改為停用以保留歷史資料。</div>`;
     el.querySelector('#add').onclick = () => UI.modal({ title: '新增帳號', wide: true, body: form(null), onSubmit: submit(null) });
+    el.querySelectorAll('[data-ud]').forEach(b => {
+      const u = users.find(x => x.id === Number(b.dataset.ud));
+      b.onclick = async () => {
+        if (!await UI.confirm(`刪除帳號「${u.name}（${u.username}）」？有服務紀錄的話會改為停用。`)) return;
+        try { const r = await DEL(`/users/${u.id}`); UI.toast(r.message || '已刪除'); App.go('users'); }
+        catch (e) { UI.err(e); }
+      };
+    });
     el.querySelectorAll('[data-u]').forEach(b => {
       const u = users.find(x => x.id === Number(b.dataset.u));
       b.onclick = () => UI.modal({ title: '編輯帳號：' + u.username, wide: true, body: form(u), onSubmit: submit(u) });
@@ -1035,11 +1089,20 @@ App.page('settings', {
         <td style="font-size:13px">${UI.esc(x.address || '-')}</td>
         <td>${x.rooms}</td><td>${x.counselors}</td>
         <td>${x.active ? UI.tag('啟用', 'ok') : UI.tag('停用')}</td>
-        <td><button class="btn tiny secondary" data-st="${x.id}">編輯</button></td></tr>`), '尚未建立據點') +
+        <td style="white-space:nowrap"><button class="btn tiny secondary" data-st="${x.id}">編輯</button>
+          <button class="btn tiny danger" data-sd="${x.id}">刪除</button></td></tr>`), '尚未建立據點') +
       '<button class="btn small" id="as" style="margin-top:10px">新增據點</button>';
     sb.querySelector('#as').onclick = () => UI.modal({
       title: '新增據點', body: siteForm(null),
       onSubmit: async e => { await POST('/sites', UI.formData(e)); App.go('settings'); }
+    });
+    sb.querySelectorAll('[data-sd]').forEach(b => {
+      const st = sites.find(x => x.id === Number(b.dataset.sd));
+      b.onclick = async () => {
+        if (!await UI.confirm(`刪除據點「${st.name}」？若仍有諮商室、駐點心理師或預約，會改為停用。`)) return;
+        try { const r = await DEL(`/sites/${st.id}`); UI.toast(r.message || '已刪除'); App.go('settings'); }
+        catch (e) { UI.err(e); }
+      };
     });
     sb.querySelectorAll('[data-st]').forEach(b => {
       const st = sites.find(x => x.id === Number(b.dataset.st));
@@ -1081,7 +1144,8 @@ App.page('settings', {
         <td>${UI.esc(r.name)}</td><td>${UI.esc(r.site_name || '未指定')}</td>
         <td>${r.capacity}</td><td>${UI.esc(r.note)}</td>
         <td>${r.active ? UI.tag('啟用', 'ok') : UI.tag('停用')}</td>
-        <td><button class="btn tiny secondary" data-rm="${r.id}">編輯</button></td></tr>`)) +
+        <td style="white-space:nowrap"><button class="btn tiny secondary" data-rm="${r.id}">編輯</button>
+          <button class="btn tiny danger" data-rd="${r.id}">刪除</button></td></tr>`)) +
       '<button class="btn small" id="ar" style="margin-top:10px">新增諮商室</button>';
     const roomForm = r => `<div class="form-grid">
       ${UI.input('name', '名稱', { value: r ? r.name : '' })}
@@ -1093,6 +1157,14 @@ App.page('settings', {
       title: '新增諮商室', body: roomForm(null),
       onSubmit: async e => { await POST('/rooms', UI.formData(e)); App.go('settings'); }
     });
+    rb.querySelectorAll('[data-rd]').forEach(b => {
+      const r = rooms.find(x => x.id === Number(b.dataset.rd));
+      b.onclick = async () => {
+        if (!await UI.confirm(`刪除諮商室「${r.name}」？排過預約或團體場次的話會改為停用。`)) return;
+        try { const out = await DEL(`/rooms/${r.id}`); UI.toast(out.message || '已刪除'); App.go('settings'); }
+        catch (e) { UI.err(e); }
+      };
+    });
     rb.querySelectorAll('[data-rm]').forEach(b => {
       const r = rooms.find(x => x.id === Number(b.dataset.rm));
       b.onclick = () => UI.modal({
@@ -1103,22 +1175,44 @@ App.page('settings', {
 
     const templates = await GET('/consent-templates');
     const cb = el.querySelector('#consents');
-    cb.innerHTML = UI.table(['同意書', '版本', '必要', '可不同意', '限未成年', ''], templates.map(t => `<tr>
-      <td>${UI.esc(t.title)}</td><td>v${t.version}</td><td>${t.required ? '是' : '否'}</td>
+    const tplForm = t => `<div class="form-grid">
+      ${t ? '' : UI.input('key', '識別碼（英數與底線，建立後不可改）', { placeholder: '例：telehealth' })}
+      ${UI.input('title', '標題', { value: t ? t.title : '', full: true })}
+      ${UI.textarea('body', '內容', { value: t ? t.body : '', rows: 16 })}
+      ${UI.checkbox('required', '必要同意書', t ? t.required : true)}
+      ${UI.checkbox('allow_decline', '允許選擇不同意', t ? t.allow_decline : false)}
+      ${UI.checkbox('minor_only', '僅未成年個案需簽', t ? t.minor_only : false)}
+      ${t ? UI.checkbox('active', '啟用（停用後不再要求新個案簽署）', t.active) : ''}</div>`;
+    cb.innerHTML = UI.table(['同意書', '版本', '必要', '可不同意', '限未成年', '狀態', ''], templates.map(t => `<tr>
+      <td>${UI.esc(t.title)}<div style="font-size:11.5px;color:var(--muted);font-family:monospace">${UI.esc(t.key)}</div></td>
+      <td>v${t.version}</td><td>${t.required ? '是' : '否'}</td>
       <td>${t.allow_decline ? '是' : '否'}</td><td>${t.minor_only ? '是' : '否'}</td>
-      <td><button class="btn tiny secondary" data-t="${t.id}">編輯</button></td></tr>`)) +
-      '<div style="font-size:12.5px;color:var(--muted);margin-top:8px">修改內容會使版本遞增，已簽署者需重新簽署；舊版簽署紀錄保留全文快照。</div>';
+      <td>${t.active ? UI.tag('啟用', 'ok') : UI.tag('停用')}</td>
+      <td style="white-space:nowrap"><button class="btn tiny secondary" data-t="${t.id}">編輯</button>
+        <button class="btn tiny danger" data-td="${t.id}">刪除</button></td></tr>`)) +
+      '<button class="btn small" id="at" style="margin-top:10px">新增同意書範本</button>' +
+      '<div style="font-size:12.5px;color:var(--muted);margin-top:8px">修改內容會使版本遞增，已簽署者需重新簽署；舊版簽署紀錄保留全文快照。已有人簽過的範本刪除時會自動改為停用。</div>';
+    cb.querySelector('#at').onclick = () => UI.modal({
+      title: '新增同意書範本', wide: true, body: tplForm(null),
+      onSubmit: async e => { await POST('/consent-templates', UI.formData(e)); UI.toast('已新增'); App.go('settings'); }
+    });
     cb.querySelectorAll('[data-t]').forEach(b => {
       const t = templates.find(x => x.id === Number(b.dataset.t));
       b.onclick = () => UI.modal({
-        title: '編輯同意書範本', wide: true,
-        body: `<div class="form-grid">${UI.input('title', '標題', { value: t.title, full: true })}
-          ${UI.textarea('body', '內容', { value: t.body, rows: 16 })}
-          ${UI.checkbox('required', '必要同意書', t.required)}
-          ${UI.checkbox('allow_decline', '允許選擇不同意', t.allow_decline)}
-          ${UI.checkbox('minor_only', '僅未成年個案需簽', t.minor_only)}</div>`,
+        title: '編輯同意書範本', wide: true, body: tplForm(t),
         onSubmit: async e => { await PUT(`/consent-templates/${t.id}`, UI.formData(e)); UI.toast('已儲存'); App.go('settings'); }
       });
+    });
+    cb.querySelectorAll('[data-td]').forEach(b => {
+      const t = templates.find(x => x.id === Number(b.dataset.td));
+      b.onclick = async () => {
+        if (!await UI.confirm(`刪除同意書範本「${t.title}」？已有人簽署過的話會改為停用，簽署紀錄保留。`)) return;
+        try {
+          const r = await DEL(`/consent-templates/${t.id}`);
+          UI.toast(r.message || '已刪除');
+          App.go('settings');
+        } catch (e) { UI.err(e); }
+      };
     });
   }
 });

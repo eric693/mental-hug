@@ -73,7 +73,7 @@ router.get('/clients/:id', requireStaff('clients'), (req, res) => {
   if (!c) return res.status(404).json({ error: '找不到此個案' });
   delete c.password_hash;
   const consents = db.prepare('SELECT id, key, title, agreed, signer_name, signer_role, version, signed_at FROM consents WHERE client_id = ? ORDER BY signed_at DESC').all(c.id);
-  const templates = db.prepare('SELECT * FROM consent_templates ORDER BY sort, id').all()
+  const templates = db.prepare('SELECT * FROM consent_templates WHERE active = 1 ORDER BY sort, id').all()
     .filter(t => !t.minor_only || c.is_minor);
   res.json({
     ...c,
@@ -173,17 +173,53 @@ router.get('/consent-templates', requireStaff(), (req, res) => {
   res.json(db.prepare('SELECT * FROM consent_templates ORDER BY sort, id').all());
 });
 
+// 新增同意書範本：key 是程式用的識別碼，僅收英數與底線，避免與既有範本撞號
+router.post('/consent-templates', requireStaff('settings'), (req, res) => {
+  const b = req.body || {};
+  const key = String(b.key || '').trim().toLowerCase().replace(/[^a-z0-9_]/g, '');
+  const title = String(b.title || '').trim();
+  if (!key) return res.status(400).json({ error: '請填寫識別碼（英數與底線）' });
+  if (!title) return res.status(400).json({ error: '請填寫標題' });
+  if (db.prepare('SELECT 1 FROM consent_templates WHERE key = ?').get(key)) {
+    return res.status(400).json({ error: '此識別碼已存在' });
+  }
+  const maxSort = db.prepare('SELECT COALESCE(MAX(sort),0) n FROM consent_templates').get().n;
+  const info = db.prepare(`INSERT INTO consent_templates (key, title, body, required, allow_decline, minor_only, sort)
+    VALUES (?,?,?,?,?,?,?)`).run(key, title, String(b.body || ''),
+    b.required ? 1 : 0, b.allow_decline ? 1 : 0, b.minor_only ? 1 : 0, maxSort + 1);
+  audit('staff', req.user.id, req.user.name, '新增同意書範本', key);
+  res.json({ id: info.lastInsertRowid });
+});
+
+// 刪除範本：已有人簽署過就只能停用，簽署紀錄必須留著
+router.delete('/consent-templates/:id', requireStaff('settings'), (req, res) => {
+  const t = db.prepare('SELECT * FROM consent_templates WHERE id = ?').get(req.params.id);
+  if (!t) return res.status(404).json({ error: '找不到此範本' });
+  const signed = db.prepare('SELECT COUNT(*) n FROM consents WHERE key = ?').get(t.key).n;
+  if (signed) {
+    db.prepare('UPDATE consent_templates SET active = 0 WHERE id = ?').run(t.id);
+    audit('staff', req.user.id, req.user.name, '停用同意書範本', t.key, { signed });
+    return res.json({ ok: true, disabled: true, message: `已有 ${signed} 筆簽署紀錄，改為停用（不再要求新個案簽署）` });
+  }
+  db.prepare('DELETE FROM consent_templates WHERE id = ?').run(t.id);
+  audit('staff', req.user.id, req.user.name, '刪除同意書範本', t.key);
+  res.json({ ok: true, disabled: false });
+});
+
 router.put('/consent-templates/:id', requireStaff('settings'), (req, res) => {
   const t = db.prepare('SELECT * FROM consent_templates WHERE id = ?').get(req.params.id);
   if (!t) return res.status(404).json({ error: '找不到此範本' });
   const { title = t.title, body = t.body, required, allow_decline, minor_only } = req.body || {};
   // 內容有變動即遞增版本，已簽署者需重新簽署新版
   const version = body !== t.body ? t.version + 1 : t.version;
-  db.prepare(`UPDATE consent_templates SET title = ?, body = ?, version = ?, required = ?, allow_decline = ?, minor_only = ? WHERE id = ?`)
+  const active = (req.body || {}).active;
+  db.prepare(`UPDATE consent_templates SET title = ?, body = ?, version = ?, required = ?, allow_decline = ?,
+      minor_only = ?, active = ? WHERE id = ?`)
     .run(title, body, version,
       required === undefined ? t.required : (required ? 1 : 0),
       allow_decline === undefined ? t.allow_decline : (allow_decline ? 1 : 0),
-      minor_only === undefined ? t.minor_only : (minor_only ? 1 : 0), t.id);
+      minor_only === undefined ? t.minor_only : (minor_only ? 1 : 0),
+      active === undefined ? t.active : (active ? 1 : 0), t.id);
   audit('staff', req.user.id, req.user.name, '修改同意書範本', t.key, { version });
   res.json({ ok: true, version });
 });
@@ -212,6 +248,17 @@ router.post('/clients/:id/consents', requireStaff('consents'), (req, res) => {
               VALUES (?,?,?,?,?,?,?,?,?,?)`)
     .run(c.id, t.key, t.title, t.body, t.version, agreed ? 1 : 0, signer_name, signer_role, signature, clientIp(req));
   audit('staff', req.user.id, req.user.name, '登錄同意書', `${c.code}/${t.key}`, { agreed: !!agreed });
+  res.json({ ok: true });
+});
+
+// 撤銷已登錄的同意書：簽錯人、重複登錄時用；一律留稽核軌跡
+router.delete('/consents/:id', requireStaff('consents'), (req, res) => {
+  const row = db.prepare('SELECT * FROM consents WHERE id = ?').get(req.params.id);
+  if (!row) return res.status(404).json({ error: '找不到此紀錄' });
+  const c = db.prepare('SELECT code FROM clients WHERE id = ?').get(row.client_id);
+  db.prepare('DELETE FROM consents WHERE id = ?').run(row.id);
+  audit('staff', req.user.id, req.user.name, '撤銷同意書簽署紀錄',
+    `${c ? c.code : row.client_id}/${row.key}`, { version: row.version, signer: row.signer_name });
   res.json({ ok: true });
 });
 

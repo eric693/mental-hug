@@ -61,12 +61,21 @@ App.page('intake', {
             <button class="btn tiny secondary" data-e="${r.id}">編輯</button>
             ${r.status !== 'converted' ? `<button class="btn tiny" data-a="${r.id}">派案</button>
               <button class="btn tiny warn" data-cv="${r.id}">建檔</button>
-              <button class="btn tiny danger" data-cl="${r.id}">結束</button>` : `<a class="btn tiny secondary" href="#client/${r.client_id}">個案</a>`}
+              <button class="btn tiny danger" data-cl="${r.id}">結束</button>
+              <button class="btn tiny danger" data-dl="${r.id}">刪除</button>` : `<a class="btn tiny secondary" href="#client/${r.client_id}">個案</a>`}
           </td></tr>`),
         '沒有待處理的來電登記');
 
       el.querySelectorAll('[data-e]').forEach(b => {
         b.onclick = () => intakeDialog(rows.find(r => r.id === Number(b.dataset.e)), draw);
+      });
+      // 誤登的來電才用刪除；已建檔的走「結束」保留軌跡
+      el.querySelectorAll('[data-dl]').forEach(b => {
+        const r = rows.find(x => x.id === Number(b.dataset.dl));
+        b.onclick = async () => {
+          if (!await UI.confirm(`刪除「${r.name}」的來電登記？此動作不可復原（若只是不成案，請改用「結束」）。`)) return;
+          try { await DEL(`/intakes/${r.id}`); UI.toast('已刪除'); draw(); } catch (e) { UI.err(e); }
+        };
       });
       el.querySelectorAll('[data-a]').forEach(b => {
         b.onclick = () => UI.modal({
@@ -301,6 +310,7 @@ App.page('intake-forms', {
               <button class="btn tiny secondary" data-sd="${r.id}">傳送</button>` : ''}
             ${r.status !== 'sent' ? `<button class="btn tiny secondary" data-vw="${r.id}">檢視</button>` : ''}
             ${r.status === 'done' && !r.intake_id ? `<button class="btn tiny" data-ti="${r.id}">轉來電登記</button>` : ''}
+            ${r.status !== 'used' ? `<button class="btn tiny danger" data-fd="${r.id}">刪除</button>` : ''}
           </td></tr>`), '尚無問卷')}`;
 
       const showLink = token => UI.modal({
@@ -316,6 +326,12 @@ App.page('intake-forms', {
         }
       });
       el.querySelectorAll('[data-lk]').forEach(b => { b.onclick = () => showLink(b.dataset.lk); });
+      el.querySelectorAll('[data-fd]').forEach(b => {
+        b.onclick = async () => {
+          if (!await UI.confirm('刪除此問卷連結？已發出的連結會立刻失效。')) return;
+          try { await DEL(`/intake-forms/${b.dataset.fd}`); UI.toast('已刪除'); draw(); } catch (e) { UI.err(e); }
+        };
+      });
       el.querySelectorAll('[data-sd]').forEach(b => {
         const r = rows.find(x => x.id === Number(b.dataset.sd));
         b.onclick = () => UI.modal({

@@ -355,3 +355,15 @@ table.list tr:hover td { background: #f8fbfb; }
 /* ---- 兩欄卡片（總覽圖表）---- */
 .grid-2 { display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 0 16px; }
 .grid-2 > .card { margin-bottom: 16px; }
+
+/* ---- 流程說明（LINE 傳話設定頁）---- */
+.flow { display: flex; flex-direction: column; gap: 2px; }
+.flow-step { display: flex; gap: 12px; padding: 10px 0; border-bottom: 1px dashed var(--border); }
+.flow-step:last-child { border-bottom: none; }
+.flow-step .n {
+  flex: 0 0 26px; height: 26px; border-radius: 50%; background: var(--primary); color: #fff;
+  font-size: 13px; font-weight: 700; display: flex; align-items: center; justify-content: center;
+}
+.flow-step b { font-size: 14.5px; }
+.flow-step p { font-size: 13px; color: var(--muted); line-height: 1.8; margin-top: 2px; }
+.flow-step code { background: var(--primary-light); border-radius: 4px; padding: 1px 5px; font-size: 12.5px; }

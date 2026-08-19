@@ -132,5 +132,20 @@ router.get('/risk-events/:id/report-form', requireStaff('risk'), (req, res) => {
   });
 });
 
+// 刪除危機事件：誤登才用；已完成通報的不刪（通報紀錄要留存），改用結案
+router.delete('/risk-events/:id', requireStaff('risk'), (req, res) => {
+  const e = db.prepare(`SELECT r.*, c.code AS client_code FROM risk_events r
+    LEFT JOIN clients c ON c.id = r.client_id WHERE r.id = ?`).get(req.params.id);
+  if (!e) return res.status(404).json({ error: '找不到此事件' });
+  if (e.reported) return res.status(400).json({ error: '已完成通報的事件不可刪除；如已處理完畢請改用結案' });
+  // risk_events 沒有建立者欄位，以處理人判斷；未指定處理人時僅管理者可刪
+  if (req.user.role !== 'admin' && e.handler_id !== req.user.id) {
+    return res.status(403).json({ error: '只有處理人或管理者可刪除此事件' });
+  }
+  db.prepare('DELETE FROM risk_events WHERE id = ?').run(e.id);
+  audit('staff', req.user.id, req.user.name, '刪除危機事件', e.client_code || '', { type: e.type, date: e.date });
+  res.json({ ok: true });
+});
+
 module.exports = router;
 module.exports.withReportState = withReportState;

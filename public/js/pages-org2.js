@@ -54,8 +54,11 @@ App.page('partners', {
           <td>${p.client_count}</td>
           <td>${p.used_sessions}${p.quota_sessions ? ' / ' + p.quota_sessions : ''}
             ${p.remaining !== null && p.remaining <= 5 ? UI.tag('額度將用罄', 'danger') : ''}</td>
-          <td><button class="btn tiny secondary" data-e="${p.id}">編輯</button>
-            <button class="btn tiny" data-v="${p.id}">明細</button></td></tr>`), '尚無合作單位')}</div>
+          <td style="white-space:nowrap"><button class="btn tiny secondary" data-e="${p.id}">編輯</button>
+            <button class="btn tiny" data-v="${p.id}">明細</button>
+            <button class="btn tiny danger" data-pd="${p.id}">刪除</button></td></tr>`), '尚無合作單位')}
+        <div style="font-size:12.5px;color:var(--muted);margin-top:8px">
+          仍有個案或請款紀錄的單位不會真的刪除，會改為停用。</div></div>
       <div class="card"><h3>請款單</h3>
         ${UI.table(['月份', '單位', '次數', '金額', '狀態', '發票／收據號', ''], settlements.map(s => `<tr>
           <td>${s.month}</td><td>${UI.esc(s.partner_name)}</td><td>${s.sessions}</td>
@@ -69,6 +72,14 @@ App.page('partners', {
     el.querySelector('#add').onclick = () => partnerDialog(null, () => App.go('partners'));
     el.querySelectorAll('[data-e]').forEach(b => {
       b.onclick = () => partnerDialog(partners.find(p => p.id === Number(b.dataset.e)), () => App.go('partners'));
+    });
+    el.querySelectorAll('[data-pd]').forEach(b => {
+      const p = partners.find(x => x.id === Number(b.dataset.pd));
+      b.onclick = async () => {
+        if (!await UI.confirm(`刪除合作單位「${p.name}」？仍有個案或請款紀錄時會改為停用。`)) return;
+        try { const r = await DEL(`/partners/${p.id}`); UI.toast(r.message || '已刪除'); App.go('partners'); }
+        catch (e) { UI.err(e); }
+      };
     });
     el.querySelectorAll('[data-v]').forEach(b => {
       b.onclick = async () => {

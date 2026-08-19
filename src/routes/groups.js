@@ -106,6 +106,23 @@ router.post('/groups/:id/members', requireStaff('groups'), (req, res) => {
   res.json({ ok: true });
 });
 
+// 移除團體成員：已有出席紀錄者不硬刪（會影響出席率與計費），改標為退出
+router.delete('/group-members/:id', requireStaff('groups'), (req, res) => {
+  const m = db.prepare('SELECT * FROM group_members WHERE id = ?').get(req.params.id);
+  if (!m) return res.status(404).json({ error: '找不到此成員' });
+  const att = db.prepare(`SELECT COUNT(*) n FROM group_attendance ga
+    JOIN group_sessions gs ON gs.id = ga.session_id
+    WHERE ga.client_id = ? AND gs.group_id = ?`).get(m.client_id, m.group_id).n;
+  if (att) {
+    db.prepare("UPDATE group_members SET status = 'dropped' WHERE id = ?").run(m.id);
+    audit('staff', req.user.id, req.user.name, '團體成員標為退出', String(m.group_id), { attendance: att });
+    return res.json({ ok: true, dropped: true, message: `此成員已有 ${att} 筆出席紀錄，改標為退出` });
+  }
+  db.prepare('DELETE FROM group_members WHERE id = ?').run(m.id);
+  audit('staff', req.user.id, req.user.name, '移除團體成員', String(m.group_id));
+  res.json({ ok: true, dropped: false });
+});
+
 router.put('/group-members/:id', requireStaff('groups'), (req, res) => {
   const m = db.prepare('SELECT * FROM group_members WHERE id = ?').get(req.params.id);
   if (!m) return res.status(404).json({ error: '找不到此成員' });

@@ -44,6 +44,20 @@ router.post('/assessments', requireStaff('assessments'), (req, res) => {
   res.json({ id: info.lastInsertRowid, ...s });
 });
 
+// 編輯量表紀錄：只開放施測日期與備註。
+// 分數與判讀由作答算出，改了會與作答對不上；答錯要重登請先刪除再登錄一次。
+router.put('/assessments/:id', requireStaff('assessments'), (req, res) => {
+  const a2 = db.prepare('SELECT * FROM assessments WHERE id = ?').get(req.params.id);
+  if (!a2) return res.status(404).json({ error: '找不到此紀錄' });
+  const b2 = req.body || {};
+  const date = b2.date === undefined ? a2.date : String(b2.date).slice(0, 10);
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) return res.status(400).json({ error: '日期格式不正確' });
+  db.prepare('UPDATE assessments SET date = ?, note = ? WHERE id = ?')
+    .run(date, b2.note === undefined ? a2.note : String(b2.note), a2.id);
+  audit('staff', req.user.id, req.user.name, '修改量表紀錄', String(a2.client_id), { scale: a2.scale, date });
+  res.json({ ok: true });
+});
+
 router.delete('/assessments/:id', requireStaff('assessments'), (req, res) => {
   const a = db.prepare('SELECT * FROM assessments WHERE id = ?').get(req.params.id);
   if (!a) return res.status(404).json({ error: '找不到此紀錄' });
@@ -54,7 +68,7 @@ router.delete('/assessments/:id', requireStaff('assessments'), (req, res) => {
 
 // 同一量表的分數趨勢（處遇成效佐證）
 router.get('/clients/:id/assessment-trend', requireStaff('assessments'), (req, res) => {
-  const rows = db.prepare('SELECT id, scale, date, total, severity, alert, filled_by FROM assessments WHERE client_id = ? ORDER BY date').all(req.params.id);
+  const rows = db.prepare('SELECT id, scale, date, total, severity, alert, filled_by, note FROM assessments WHERE client_id = ? ORDER BY date').all(req.params.id);
   const out = {};
   for (const r of rows) (out[r.scale] = out[r.scale] || []).push(r);
   res.json(out);

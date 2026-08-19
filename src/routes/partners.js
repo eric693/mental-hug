@@ -46,6 +46,22 @@ router.put('/partners/:id', requireStaff('partners'), (req, res) => {
   res.json({ ok: true });
 });
 
+// 刪除合作單位：還有個案或請款紀錄時只能停用，避免把歷史帳務的來源砍掉
+router.delete('/partners/:id', requireStaff('partners'), (req, res) => {
+  const p = db.prepare('SELECT * FROM partners WHERE id = ?').get(req.params.id);
+  if (!p) return res.status(404).json({ error: '找不到此單位' });
+  const clients = db.prepare('SELECT COUNT(*) n FROM clients WHERE partner_id = ?').get(p.id).n;
+  const settlements = db.prepare('SELECT COUNT(*) n FROM settlements WHERE partner_id = ?').get(p.id).n;
+  if (clients || settlements) {
+    db.prepare('UPDATE partners SET active = 0 WHERE id = ?').run(p.id);
+    audit('staff', req.user.id, req.user.name, '停用合作單位', p.name, { clients, settlements });
+    return res.json({ ok: true, disabled: true, message: `此單位仍有 ${clients} 位個案、${settlements} 筆請款紀錄，已改為停用` });
+  }
+  db.prepare('DELETE FROM partners WHERE id = ?').run(p.id);
+  audit('staff', req.user.id, req.user.name, '刪除合作單位', p.name);
+  res.json({ ok: true, disabled: false });
+});
+
 // 單位明細：個案名單與請款紀錄
 router.get('/partners/:id', requireStaff('partners'), (req, res) => {
   const p = db.prepare('SELECT * FROM partners WHERE id = ?').get(req.params.id);

@@ -357,6 +357,38 @@ router.put('/users/:id', requireStaff('users'), (req, res) => {
   res.json({ ok: true, warnings });
 });
 
+// 刪除帳號：只有「完全沒用過」的帳號可以真的刪掉（例如建錯帳號）。
+// 已排過班、寫過紀錄或收過款的帳號一律改為停用——歷史資料要指得回人。
+router.delete('/users/:id', requireStaff('users'), (req, res) => {
+  const u = db.prepare('SELECT * FROM users WHERE id = ?').get(req.params.id);
+  if (!u) return res.status(404).json({ error: '找不到此帳號' });
+  if (u.id === req.user.id) return res.status(400).json({ error: '不可刪除自己的帳號' });
+  if (u.role === 'admin') {
+    const admins = db.prepare("SELECT COUNT(*) n FROM users WHERE role = 'admin' AND active = 1").get().n;
+    if (admins <= 1) return res.status(400).json({ error: '系統需保留至少一位啟用中的管理者' });
+  }
+  const used = {
+    預約: db.prepare('SELECT COUNT(*) n FROM appointments WHERE counselor_id = ?').get(u.id).n,
+    晤談紀錄: db.prepare('SELECT COUNT(*) n FROM session_notes WHERE counselor_id = ?').get(u.id).n,
+    主責個案: db.prepare('SELECT COUNT(*) n FROM clients WHERE counselor_id = ?').get(u.id).n,
+    報酬單: db.prepare('SELECT COUNT(*) n FROM payouts WHERE user_id = ?').get(u.id).n
+  };
+  const busy = Object.entries(used).filter(([, n]) => n > 0);
+  if (busy.length) {
+    if (!u.active) return res.status(400).json({ error: '此帳號已有服務紀錄，只能停用，已是停用狀態' });
+    db.prepare('UPDATE users SET active = 0 WHERE id = ?').run(u.id);
+    audit('staff', req.user.id, req.user.name, '停用帳號', u.username, used);
+    return res.json({
+      ok: true, disabled: true,
+      message: `此帳號已有 ${busy.map(([k, n]) => k + ' ' + n + ' 筆').join('、')}，改為停用（保留歷史資料）`
+    });
+  }
+  db.prepare('DELETE FROM user_sites WHERE user_id = ?').run(u.id);
+  db.prepare('DELETE FROM users WHERE id = ?').run(u.id);
+  audit('staff', req.user.id, req.user.name, '刪除帳號', u.username);
+  res.json({ ok: true, disabled: false });
+});
+
 router.put('/me/password', requireStaff(), (req, res) => {
   const { old_password = '', new_password = '' } = req.body || {};
   if (!bcrypt.compareSync(old_password, req.user.password_hash)) return res.status(400).json({ error: '舊密碼不正確' });
@@ -392,6 +424,21 @@ router.post('/announcements', requireStaff('announcements'), (req, res) => {
   const info = db.prepare('INSERT INTO announcements (title, content, audience, pinned, publish_date, created_by) VALUES (?,?,?,?,?,?)')
     .run(title, content, audience, pinned ? 1 : 0, publish_date, req.user.id);
   res.json({ id: info.lastInsertRowid });
+});
+router.put('/announcements/:id', requireStaff('announcements'), (req, res) => {
+  const a2 = db.prepare('SELECT * FROM announcements WHERE id = ?').get(req.params.id);
+  if (!a2) return res.status(404).json({ error: '找不到此公告' });
+  const b2 = req.body || {};
+  const title = b2.title === undefined ? a2.title : String(b2.title).trim();
+  if (!title) return res.status(400).json({ error: '請填寫標題' });
+  db.prepare(`UPDATE announcements SET title = ?, content = ?, audience = ?, pinned = ?, publish_date = ?
+    WHERE id = ?`).run(title,
+    b2.content === undefined ? a2.content : b2.content,
+    b2.audience === undefined ? a2.audience : b2.audience,
+    (b2.pinned === undefined ? a2.pinned : (b2.pinned ? 1 : 0)),
+    b2.publish_date === undefined ? a2.publish_date : b2.publish_date, a2.id);
+  audit('staff', req.user.id, req.user.name, '修改公告', String(a2.id));
+  res.json({ ok: true });
 });
 router.delete('/announcements/:id', requireStaff('announcements'), (req, res) => {
   db.prepare('DELETE FROM announcements WHERE id = ?').run(req.params.id);

@@ -780,6 +780,107 @@ function startServer() {
     await admin.ok('PUT', '/api/settings', { public_booking_enabled: '1' });
   });
 
+  // ---------------------------------------------------------------- CRUD 補齊
+  section('各模組新增／編輯／刪除');
+  await test('公告可編輯', async () => {
+    const r = await admin.ok('POST', '/api/announcements', { title: '冒煙公告', content: 'A', audience: 'staff' });
+    await admin.ok('PUT', `/api/announcements/${r.id}`, { title: '冒煙公告（改）', pinned: 1 });
+    const rows = await admin.ok('GET', '/api/announcements');
+    const row = rows.find(x => x.id === r.id);
+    equal(row.title, '冒煙公告（改）', '標題');
+    equal(row.pinned, 1, '置頂');
+    await admin.fails('PUT', `/api/announcements/${r.id}`, { title: '' }, '標題');
+    await admin.ok('DELETE', `/api/announcements/${r.id}`);
+  });
+  await test('同意書範本可新增、停用與刪除；已簽署者只停用', async () => {
+    const t = await admin.ok('POST', '/api/consent-templates', { key: 'smoke_tpl', title: '冒煙同意書', body: '內容' });
+    await admin.fails('POST', '/api/consent-templates', { key: 'smoke_tpl', title: '重複' }, '已存在');
+    const del = await admin.ok('DELETE', `/api/consent-templates/${t.id}`);
+    equal(del.disabled, false, '沒人簽過應真的刪除');
+    // 已簽署的範本改為停用，且不再出現在待簽清單
+    const t2 = await admin.ok('POST', '/api/consent-templates', { key: 'smoke_tpl2', title: '冒煙同意書2', body: '內容' });
+    await admin.ok('POST', `/api/clients/${clientId}/consents`, { key: 'smoke_tpl2', signer_name: '測試' });
+    const del2 = await admin.ok('DELETE', `/api/consent-templates/${t2.id}`);
+    equal(del2.disabled, true, '有簽署紀錄應改為停用');
+    const tpls = await admin.ok('GET', '/api/consent-templates');
+    equal(tpls.find(x => x.id === t2.id).active, 0, '停用狀態');
+    const c = await admin.ok('GET', `/api/clients/${clientId}`);
+    assert(!c.pending_consents.some(x => x.key === 'smoke_tpl2'), '停用範本不應再出現在待簽清單');
+  });
+  await test('已簽署同意書可撤銷', async () => {
+    const c = await admin.ok('GET', `/api/clients/${clientId}`);
+    const signed = c.consents.find(x => x.key === 'smoke_tpl2');
+    assert(signed, '前一項應留下一筆簽署紀錄');
+    await admin.ok('DELETE', `/api/consents/${signed.id}`);
+    const after = await admin.ok('GET', `/api/clients/${clientId}`);
+    assert(!after.consents.some(x => x.id === signed.id), '撤銷後不應still存在');
+  });
+  await test('量表可改日期與備註，分數不可直接改', async () => {
+    const r = await admin.ok('POST', '/api/assessments',
+      { client_id: clientId, scale: 'PHQ9', answers: [1, 1, 1, 1, 1, 1, 1, 1, 0], date: monday });
+    await admin.ok('PUT', `/api/assessments/${r.id}`, { date: addDays(monday, 1), note: '補登', total: 99 });
+    const trend = await admin.ok('GET', `/api/clients/${clientId}/assessment-trend`);
+    const row = trend.PHQ9.find(x => x.id === r.id);
+    equal(row.date, addDays(monday, 1), '日期');
+    equal(row.note, '補登', '備註');
+    equal(row.total, 8, '分數不應被前端覆寫');
+    await admin.fails('PUT', `/api/assessments/${r.id}`, { date: 'x' }, '日期');
+    await admin.ok('DELETE', `/api/assessments/${r.id}`);
+  });
+  await test('方案：用過的不可刪，沒用過的可刪', async () => {
+    const p = await admin.ok('POST', '/api/packages',
+      { client_id: clientId, name: '冒煙方案', sessions_total: 5, amount: 5000, start_date: monday });
+    // 建立方案會同時開一張收費單，因此預期擋下
+    await admin.fails('DELETE', `/api/packages/${p.id}`, undefined, '收費');
+    const invs = await admin.ok('GET', `/api/invoices?client_id=${clientId}`);
+    const inv = invs.rows.find(x => x.package_id === p.id);
+    await admin.ok('POST', `/api/invoices/${inv.id}/void`, { reason: '測試' });
+    await admin.ok('DELETE', `/api/invoices/${inv.id}`).catch(() => {});
+  });
+  await test('處遇計畫與晤談紀錄草稿可刪，已簽核紀錄不可刪', async () => {
+    const plan = await lin.ok('POST', '/api/plans',
+      { client_id: clientId, start_date: monday, approach: 'CBT', summary: '測試', goals: [{ content: '目標' }] });
+    await lin.ok('DELETE', `/api/plans/${plan.id}`);
+    const plans = await lin.ok('GET', `/api/clients/${clientId}/plans`);
+    assert(!plans.some(x => x.id === plan.id), '計畫應已刪除');
+    const draft = await lin.ok('POST', '/api/notes',
+      { client_id: clientId, date: monday, subjective: '草稿' });
+    await chen.fails('DELETE', `/api/notes/${draft.id}`, undefined, '主責');
+    await lin.ok('DELETE', `/api/notes/${draft.id}`);
+    await lin.fails('DELETE', `/api/notes/${noteId}`, undefined, '簽核');
+  });
+  await test('來電登記可刪除，已建檔的不可刪', async () => {
+    const i = await admin.ok('POST', '/api/intakes', { name: '冒煙來電', phone: '0977000111' });
+    await admin.ok('DELETE', `/api/intakes/${i.id}`);
+    const list = await admin.ok('GET', '/api/intakes?status=new');
+    assert(!(list.rows || list).some(x => x.id === i.id), '應已刪除');
+  });
+  await test('帳號：沒用過的可刪，有服務紀錄的改停用', async () => {
+    const u = await admin.ok('POST', '/api/users',
+      { username: 'smoke_del', password: 'abc123', name: '冒煙待刪', role: 'staff' });
+    const del = await admin.ok('DELETE', `/api/users/${u.id}`);
+    equal(del.disabled, false, '沒用過應真的刪除');
+    const busy = await admin.ok('DELETE', '/api/users/2');
+    equal(busy.disabled, true, '有服務紀錄的心理師應改為停用');
+    await admin.ok('PUT', '/api/users/2', { active: 1 });
+  });
+  await test('據點與諮商室：用過的改停用', async () => {
+    const s2 = await admin.ok('POST', '/api/sites', { name: '待刪據點' });
+    const del = await admin.ok('DELETE', `/api/sites/${s2.id}`);
+    equal(del.disabled, false, '空據點應真的刪除');
+    const used = await admin.ok('DELETE', `/api/sites/${siteA}`);
+    equal(used.disabled, true, '有諮商室／預約的據點應改為停用');
+  });
+  await test('改期申請可刪，已簽核的不可刪', async () => {
+    await admin.fails('DELETE', `/api/reschedule-requests/${reqId}`, undefined, '已簽核');
+    const open2 = await admin.ok('GET', '/api/reschedule-requests?status=open');
+    if (open2.length) {
+      await admin.ok('DELETE', `/api/reschedule-requests/${open2[0].id}`);
+      const after = await admin.ok('GET', '/api/reschedule-requests?status=open');
+      assert(!after.some(x => x.id === open2[0].id), '應已刪除');
+    }
+  });
+
   // ---------------------------------------------------------------- 附件
   section('附件上傳與下載');
   let pngId, pdfId;

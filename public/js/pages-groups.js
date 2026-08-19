@@ -92,7 +92,10 @@ App.page('group', {
           <td>${stateTag('risk_level', m.risk_level)}</td>
           <td>${m.joined_at}</td>
           <td>${m.status === 'active' ? UI.tag('參與中', 'ok') : UI.tag('已退出')}</td>
-          <td>${m.status === 'active' ? `<button class="btn tiny danger" data-drop="${m.id}">退出</button>` : ''}</td></tr>`), '尚無成員')}</div>
+          <td style="white-space:nowrap">${m.status === 'active' ? `<button class="btn tiny secondary" data-drop="${m.id}">標記退出</button>` : ''}
+            <button class="btn tiny danger" data-mdel="${m.id}">移除</button></td></tr>`), '尚無成員')}
+        <div style="font-size:12.5px;color:var(--muted);margin-top:8px">
+          已有出席紀錄的成員移除時會自動改為「退出」，出席與計費紀錄保留。</div></div>
       <div class="card"><h3>場次</h3>
         ${UI.table(['場次', '日期', '時間', '諮商室', '主題', '出席', '狀態', ''], g.sessions.map(s => `<tr>
           <td>第 ${s.session_no} 次</td><td>${s.date}</td><td>${s.start_time}-${s.end_time}</td>
@@ -131,6 +134,16 @@ App.page('group', {
         if (!await UI.confirm('將此成員標記為已退出？')) return;
         await PUT(`/group-members/${b.dataset.drop}`, { status: 'dropped' });
         App.go('group/' + id);
+      };
+    });
+    el.querySelectorAll('[data-mdel]').forEach(b => {
+      b.onclick = async () => {
+        if (!await UI.confirm('把此成員從名單移除？已有出席紀錄的話會改標為退出。')) return;
+        try {
+          const r = await DEL(`/group-members/${b.dataset.mdel}`);
+          UI.toast(r.message || '已移除');
+          App.go('group/' + id);
+        } catch (e) { UI.err(e); }
       };
     });
     el.querySelectorAll('[data-ds]').forEach(b => {

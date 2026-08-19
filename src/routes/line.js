@@ -398,6 +398,17 @@ router.post('/api/reschedule-requests/:id/reject', requireStaff('line'), async (
   res.json({ ok: true, client: out });
 });
 
+// 刪除改期申請：誤建或個案自己取消時清掉；已簽核（已真的改期）的不刪，留著當軌跡
+router.delete('/api/reschedule-requests/:id', requireStaff('line'), (req, res) => {
+  const r = requestRow(req.params.id);
+  if (!r) return res.status(404).json({ error: '找不到此申請' });
+  if (r.status === 'approved') return res.status(400).json({ error: '已簽核改期的申請不可刪除' });
+  db.prepare('UPDATE line_events SET request_id = NULL WHERE request_id = ?').run(r.id);
+  db.prepare('DELETE FROM reschedule_requests WHERE id = ?').run(r.id);
+  audit('staff', req.user.id, req.user.name, '刪除改期申請', String(r.id), { client: r.client_name });
+  res.json({ ok: true });
+});
+
 // 傳話軌跡（最近 200 筆），供行政確認訊息有沒有真的送出去
 router.get('/api/line/events', requireStaff('line'), (req, res) => {
   res.json(db.prepare(`SELECT e.*, c.name AS client_name, u.name AS counselor_name

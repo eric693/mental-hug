@@ -89,6 +89,7 @@ async function safetyPlanTab(client, body, refresh) {
       ${active ? '<button class="btn small secondary" id="edit">編輯現行版本</button>' : ''}
       <button class="btn small" id="new">${active ? '另存新版本' : '建立安全計畫'}</button>
       ${active ? '<button class="btn small secondary" id="print">列印給個案</button>' : ''}
+      ${active ? '<div class="spacer"></div><button class="btn small danger" id="delp">刪除現行版本</button>' : ''}
     </div>
     ${!active && client.risk_level === 'high' ? `<div class="notice warn" style="margin-bottom:12px">
       此個案為高風險且尚未建立安全計畫，建議於下次晤談與個案一起訂定。</div>` : ''}
@@ -122,6 +123,15 @@ async function safetyPlanTab(client, body, refresh) {
   }
   if (el.querySelector('#edit')) el.querySelector('#edit').onclick = () => safetyPlanDialog(client.id, active, d.defaults, refresh);
   if (el.querySelector('#print')) el.querySelector('#print').onclick = () => safetyPlanPrint(active.id);
+  // 刪掉現行版本後，上一版會自動回復為現行，避免個案變成「完全沒有安全計畫」
+  if (el.querySelector('#delp')) el.querySelector('#delp').onclick = async () => {
+    if (!await UI.confirm(`刪除第 ${active.version} 版安全計畫？若有舊版本，上一版會自動回復為現行版本。`)) return;
+    try {
+      const r = await DEL(`/safety-plans/${active.id}`);
+      UI.toast(r.restored_version ? `已刪除，第 ${r.restored_version} 版回復為現行` : '已刪除');
+      refresh();
+    } catch (e) { UI.err(e); }
+  };
   el.querySelectorAll('[data-print]').forEach(b => { b.onclick = () => safetyPlanPrint(Number(b.dataset.print)); });
   el.querySelectorAll('[data-view]').forEach(b => {
     b.onclick = () => {

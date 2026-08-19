@@ -53,6 +53,10 @@ ensureColumns('session_notes', {
   review_comment: "TEXT NOT NULL DEFAULT ''",
   submitted_at: "TEXT NOT NULL DEFAULT ''"
 });
+ensureColumns('consent_templates', {
+  // 停用的範本不再要求新個案簽署，但已簽署的紀錄仍保留
+  active: 'INTEGER NOT NULL DEFAULT 1'
+});
 ensureColumns('intakes', {
   id_no: "TEXT NOT NULL DEFAULT ''",
   // 候補遞補：最近一次通知釋出時段的時間與內容，避免重複打擾同一位

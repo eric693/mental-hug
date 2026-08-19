@@ -295,6 +295,26 @@ router.put('/sites/:id', requireStaff('settings'), (req, res) => {
   res.json({ ok: true });
 });
 
+// 刪除據點：已有諮商室、駐點心理師或預約時只能停用，避免歷史資料指向不存在的據點
+router.delete('/sites/:id', requireStaff('settings'), (req, res) => {
+  const s2 = db.prepare('SELECT * FROM sites WHERE id = ?').get(req.params.id);
+  if (!s2) return res.status(404).json({ error: '找不到此據點' });
+  const rooms = db.prepare('SELECT COUNT(*) n FROM rooms WHERE site_id = ?').get(s2.id).n;
+  const users = db.prepare('SELECT COUNT(*) n FROM user_sites WHERE site_id = ?').get(s2.id).n;
+  const appts = db.prepare('SELECT COUNT(*) n FROM appointments WHERE site_id = ?').get(s2.id).n;
+  if (rooms || users || appts) {
+    db.prepare('UPDATE sites SET active = 0 WHERE id = ?').run(s2.id);
+    audit('staff', req.user.id, req.user.name, '停用據點', s2.name, { rooms, users, appts });
+    return res.json({
+      ok: true, disabled: true,
+      message: `此據點仍有 ${rooms} 間諮商室、${users} 位駐點心理師、${appts} 筆預約，已改為停用`
+    });
+  }
+  db.prepare('DELETE FROM sites WHERE id = ?').run(s2.id);
+  audit('staff', req.user.id, req.user.name, '刪除據點', s2.name);
+  res.json({ ok: true, disabled: false });
+});
+
 // 心理師駐點（多對多）：對外預約頁依此列出各據點可約的心理師
 router.put('/counselors/:id/sites', requireStaff('settings'), (req, res) => {
   const u = db.prepare('SELECT * FROM users WHERE id = ?').get(req.params.id);
@@ -340,6 +360,25 @@ router.put('/rooms/:id', requireStaff('settings'), (req, res) => {
   db.prepare('UPDATE rooms SET name = ?, capacity = ?, note = ?, active = ?, site_id = ? WHERE id = ?')
     .run(name, Number(capacity) || 1, note, active ? 1 : 0, siteId, r.id);
   res.json({ ok: true });
+});
+
+// 刪除諮商室：排過預約或團體場次的只能停用，時間表上的歷史紀錄要留著
+router.delete('/rooms/:id', requireStaff('settings'), (req, res) => {
+  const r = db.prepare('SELECT * FROM rooms WHERE id = ?').get(req.params.id);
+  if (!r) return res.status(404).json({ error: '找不到此諮商室' });
+  const appts = db.prepare('SELECT COUNT(*) n FROM appointments WHERE room_id = ?').get(r.id).n;
+  const sessions = db.prepare('SELECT COUNT(*) n FROM group_sessions WHERE room_id = ?').get(r.id).n;
+  if (appts || sessions) {
+    db.prepare('UPDATE rooms SET active = 0 WHERE id = ?').run(r.id);
+    audit('staff', req.user.id, req.user.name, '停用諮商室', r.name, { appts, sessions });
+    return res.json({
+      ok: true, disabled: true,
+      message: `此諮商室已排過 ${appts} 筆預約、${sessions} 場團體，已改為停用`
+    });
+  }
+  db.prepare('DELETE FROM rooms WHERE id = ?').run(r.id);
+  audit('staff', req.user.id, req.user.name, '刪除諮商室', r.name);
+  res.json({ ok: true, disabled: false });
 });
 
 // ---- 心理師可預約時段 ----

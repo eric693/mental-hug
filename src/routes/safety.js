@@ -134,4 +134,25 @@ router.get('/safety-plans/overview', requireStaff('risk'), (req, res) => {
   });
 });
 
+// 刪除安全計畫：只允許刪現行版本，刪掉後把上一版改回現行，
+// 避免個案在系統裡變成「沒有安全計畫」卻其實談過。
+router.delete('/safety-plans/:id', requireStaff('risk'), (req, res) => {
+  const p = db.prepare('SELECT * FROM safety_plans WHERE id = ?').get(req.params.id);
+  if (!p) return res.status(404).json({ error: '找不到此安全計畫' });
+  const client = db.prepare('SELECT * FROM clients WHERE id = ?').get(p.client_id);
+  if (!canViewClientNotes(req.user, client)) {
+    return res.status(403).json({ error: '安全計畫僅限主責心理師、督導與管理者存取' });
+  }
+  if (p.status !== 'active') return res.status(400).json({ error: '舊版本僅供查閱，不可刪除' });
+  const prev = db.prepare(`SELECT * FROM safety_plans WHERE client_id = ? AND id <> ?
+    ORDER BY version DESC LIMIT 1`).get(p.client_id, p.id);
+  const tx = db.transaction(() => {
+    db.prepare('DELETE FROM safety_plans WHERE id = ?').run(p.id);
+    if (prev) db.prepare("UPDATE safety_plans SET status = 'active' WHERE id = ?").run(prev.id);
+  });
+  tx();
+  audit('staff', req.user.id, req.user.name, '刪除安全計畫', client.code, { version: p.version, restored: prev ? prev.version : null });
+  res.json({ ok: true, restored_version: prev ? prev.version : null });
+});
+
 module.exports = router;

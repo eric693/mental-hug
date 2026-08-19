@@ -392,12 +392,23 @@ App.page('client', {
     : n.review_status === 'pending' ? UI.tag('待督導覆核', 'warn')
       : n.review_status === 'returned' ? UI.tag('退回補正', 'danger') : UI.tag('草稿', 'warn')}</td>
             <td><button class="btn tiny secondary" data-n="${n.id}">${n.locked ? '檢視' : n.review_status === 'pending' ? '覆核／檢視' : '編輯'}</button>
-              <button class="btn tiny secondary" data-np="${n.id}">列印</button></td></tr>`), '尚無晤談紀錄')}</div>`;
+              <button class="btn tiny secondary" data-np="${n.id}">列印</button>
+              ${!n.locked && n.review_status !== 'pending' ? `<button class="btn tiny danger" data-ndel="${n.id}">刪除</button>` : ''}
+            </td></tr>`), '尚無晤談紀錄')}
+          <div style="font-size:12.5px;color:var(--muted);margin-top:8px">
+            只有尚未簽核的草稿可以刪除；已簽核定稿的紀錄依規定須保存。</div></div>`;
         body.querySelectorAll('[data-n]').forEach(b => {
           b.onclick = () => noteDialog({ id: Number(b.dataset.n), client_id: c.id }, () => tabsRefresh('notes'));
         });
         body.querySelectorAll('[data-np]').forEach(b => {
           b.onclick = () => notePrint(Number(b.dataset.np));
+        });
+        body.querySelectorAll('[data-ndel]').forEach(b => {
+          b.onclick = async () => {
+            if (!await UI.confirm('刪除這筆晤談紀錄草稿？不可復原。')) return;
+            try { await DEL(`/notes/${b.dataset.ndel}`); UI.toast('已刪除'); tabsRefresh('notes'); }
+            catch (e) { UI.err(e); }
+          };
         });
       }
 
@@ -433,12 +444,20 @@ App.page('client', {
               <div style="background:#eef2f5;border-radius:6px;height:9px;margin-top:4px">
                 <div style="width:${Math.min(100, g.progress)}%;background:var(--primary);height:9px;border-radius:6px"></div></div>
               <div style="font-size:12px;color:var(--muted)">進度 ${g.progress}%</div></div>`).join('')}
-            <button class="btn tiny secondary" data-p="${p.id}" style="margin-top:8px">編輯</button></div>`).join('')
+            <button class="btn tiny secondary" data-p="${p.id}" style="margin-top:8px">編輯</button>
+            <button class="btn tiny danger" data-pdel="${p.id}" style="margin-top:8px">刪除</button></div>`).join('')
       : '<div class="empty">尚未建立處遇計畫</div>'}
           ${trendCards}`;
         body.querySelector('#np').onclick = () => planDialog(c.id, null, () => tabsRefresh('plans'));
         body.querySelectorAll('[data-p]').forEach(b => {
           b.onclick = () => planDialog(c.id, plans.find(p => p.id === Number(b.dataset.p)), () => tabsRefresh('plans'));
+        });
+        body.querySelectorAll('[data-pdel]').forEach(b => {
+          b.onclick = async () => {
+            if (!await UI.confirm('刪除這份處遇計畫？目標與進度會一併刪除，且不可復原。')) return;
+            try { await DEL(`/plans/${b.dataset.pdel}`); UI.toast('已刪除'); tabsRefresh('plans'); }
+            catch (e) { UI.err(e); }
+          };
         });
       }
 
@@ -463,12 +482,30 @@ App.page('client', {
               <td>${r.date}</td><td><strong>${r.total}</strong></td>
               <td>${r.alert ? UI.tag(r.severity, 'danger') : UI.esc(r.severity)}</td>
               <td>${r.filled_by === 'client' ? '個案自填' : '所內登錄'}</td>
-              <td><button class="btn tiny danger" data-da="${r.id}">刪除</button></td></tr>`))}
+              <td style="white-space:nowrap"><button class="btn tiny secondary" data-ae="${r.id}">編輯</button>
+                <button class="btn tiny danger" data-da="${r.id}">刪除</button></td></tr>`))}
             ${rows.length > 1 ? `<div style="font-size:13px;color:var(--muted);margin-top:8px">
               首測 ${rows[0].total} 分 → 最近 ${rows[rows.length - 1].total} 分
               （${rows[rows.length - 1].total < rows[0].total ? '下降' : rows[rows.length - 1].total > rows[0].total ? '上升' : '持平'}
               ${Math.abs(rows[rows.length - 1].total - rows[0].total)} 分）</div>` : ''}
           </div>`).join('') : '<div class="empty">尚無量表紀錄</div>'}`;
+        // 量表分數由作答算出，只開放改施測日期與備註；答錯要重登請刪掉再登一次
+        body.querySelectorAll('[data-ae]').forEach(b => {
+          const row = Object.values(trend).flat().find(x => x.id === Number(b.dataset.ae));
+          b.onclick = () => UI.modal({
+            title: '編輯量表紀錄',
+            body: `<div class="form-grid">
+              ${UI.input('date', '施測日期', { type: 'date', value: row.date })}
+              ${UI.textarea('note', '備註', { value: row.note || '' })}</div>
+              <div style="font-size:12.5px;color:var(--muted);margin-top:8px">
+                分數與判讀由作答決定，不能直接改；作答有誤請刪除後重新登錄。</div>`,
+            onSubmit: async e => {
+              await PUT(`/assessments/${row.id}`, UI.formData(e));
+              UI.toast('已儲存');
+              tabsRefresh('assessments');
+            }
+          });
+        });
         body.querySelector('#fill').onclick = () => scaleFillDialog(c.id, () => tabsRefresh('assessments'));
         body.querySelectorAll('[data-da]').forEach(b => {
           b.onclick = async () => {
@@ -587,11 +624,20 @@ App.page('client', {
               <td>${s ? (s.agreed ? UI.tag('已同意', 'ok') : UI.tag('不同意', 'warn')) : UI.tag('未簽署', 'danger')}</td>
               <td>${s ? UI.esc(s.signer_name) + '（' + (TW.signer_role[s.signer_role] || '') + '）' : '-'}</td>
               <td>${s ? UI.esc(s.signed_at) : '-'}</td>
-              <td><button class="btn tiny" data-c="${t.key}" data-minor="${t.minor_only}">${s ? '重新簽署' : '簽署'}</button></td></tr>`;
+              <td style="white-space:nowrap"><button class="btn tiny" data-c="${t.key}" data-minor="${t.minor_only}">${s ? '重新簽署' : '簽署'}</button>
+                ${s ? `<button class="btn tiny danger" data-cx="${s.id}">撤銷</button>` : ''}</td></tr>`;
           }))}
           <div style="font-size:12.5px;color:var(--muted);margin-top:8px">標示 * 為必要同意書；範本內容修改後版本會遞增，需重新簽署。</div></div>`;
         body.querySelectorAll('[data-c]').forEach(b => {
           b.onclick = () => consentDialog(c.id, b.dataset.c, b.dataset.minor === '1', () => App.go('client/' + id));
+        });
+        // 簽錯人或重複登錄時撤銷；動作會寫入稽核軌跡
+        body.querySelectorAll('[data-cx]').forEach(b => {
+          b.onclick = async () => {
+            if (!await UI.confirm('撤銷這筆同意書簽署紀錄？撤銷後此個案會回到未簽署狀態。')) return;
+            try { await DEL(`/consents/${b.dataset.cx}`); UI.toast('已撤銷'); App.go('client/' + id); }
+            catch (e) { UI.err(e); }
+          };
         });
       }
 

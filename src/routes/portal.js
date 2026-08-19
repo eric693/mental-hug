@@ -44,7 +44,7 @@ router.put('/password', requireClient, (req, res) => {
 
 router.get('/me', requireClient, (req, res) => {
   const c = req.client;
-  const templates = db.prepare('SELECT * FROM consent_templates ORDER BY sort, id').all()
+  const templates = db.prepare('SELECT * FROM consent_templates WHERE active = 1 ORDER BY sort, id').all()
     .filter(t => !t.minor_only || c.is_minor);
   const signed = db.prepare('SELECT key, version, agreed FROM consents WHERE client_id = ?').all(c.id);
   res.json({
@@ -230,7 +230,7 @@ router.get('/assessments', requireClient, (req, res) => {
 
 // ---- 同意書線上簽署 ----
 router.get('/consents', requireClient, (req, res) => {
-  const templates = db.prepare('SELECT * FROM consent_templates ORDER BY sort, id').all()
+  const templates = db.prepare('SELECT * FROM consent_templates WHERE active = 1 ORDER BY sort, id').all()
     .filter(t => !t.minor_only || req.client.is_minor);
   const signed = db.prepare('SELECT key, version, agreed, signer_name, signed_at FROM consents WHERE client_id = ?').all(req.client.id);
   res.json(templates.map(t => ({

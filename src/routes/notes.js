@@ -143,6 +143,23 @@ router.put('/notes/:id', requireStaff('notes'), (req, res) => {
 // 簽核定稿：定稿後不可再改（比照病歷不得事後塗改）。
 // 實習心理師的紀錄不會因本人簽核就定稿，而是轉為「待督導覆核」，
 // 由指定督導（或督導／管理者）覆核通過後才鎖定；退回補正者可修改後再送。
+// 刪除晤談紀錄：只允許本人刪自己「尚未簽核」的草稿。
+// 已簽核定稿的紀錄依《心理師法》應保存，系統一律不提供刪除。
+router.delete('/notes/:id', requireStaff('notes'), (req, res) => {
+  const n = db.prepare(`SELECT n.*, c.code AS client_code FROM session_notes n
+    LEFT JOIN clients c ON c.id = n.client_id WHERE n.id = ?`).get(req.params.id);
+  if (!n) return res.status(404).json({ error: '找不到此紀錄' });
+  if (!canViewNote(req.user, n)) return res.status(403).json({ error: '晤談紀錄僅限主責心理師、督導與管理者存取' });
+  if (n.locked) return res.status(400).json({ error: '已簽核定稿的紀錄不可刪除' });
+  if (n.review_status === 'pending') return res.status(400).json({ error: '已送出督導覆核，請先請督導退回再刪除' });
+  if (n.counselor_id !== req.user.id && req.user.role !== 'admin') {
+    return res.status(403).json({ error: '只能刪除自己撰寫的草稿' });
+  }
+  db.prepare('DELETE FROM session_notes WHERE id = ?').run(n.id);
+  audit('staff', req.user.id, req.user.name, '刪除晤談紀錄草稿', n.client_code || '', { note_id: n.id, date: n.date });
+  res.json({ ok: true });
+});
+
 router.post('/notes/:id/sign', requireStaff('notes'), (req, res) => {
   const n = db.prepare('SELECT * FROM session_notes WHERE id = ?').get(req.params.id);
   if (!n) return res.status(404).json({ error: '找不到此紀錄' });
@@ -363,6 +380,20 @@ router.put('/plans/:id', requireStaff('plans'), (req, res) => {
 });
 
 // 待檢視的處遇計畫（檢視日已到）
+// 刪除處遇計畫：連同目標一起刪；保密邊界同讀取（僅主責、督導、管理者）
+router.delete('/plans/:id', requireStaff('plans'), (req, res) => {
+  const p2 = db.prepare(`SELECT p.*, c.code AS client_code, c.counselor_id FROM treatment_plans p
+    JOIN clients c ON c.id = p.client_id WHERE p.id = ?`).get(req.params.id);
+  if (!p2) return res.status(404).json({ error: '找不到此計畫' });
+  if (!canViewNote(req.user, { counselor_id: p2.counselor_id })) {
+    return res.status(403).json({ error: '處遇計畫僅限主責心理師、督導與管理者存取' });
+  }
+  db.prepare('DELETE FROM plan_goals WHERE plan_id = ?').run(p2.id);
+  db.prepare('DELETE FROM treatment_plans WHERE id = ?').run(p2.id);
+  audit('staff', req.user.id, req.user.name, '刪除處遇計畫', p2.client_code, { plan_id: p2.id });
+  res.json({ ok: true });
+});
+
 router.get('/plans/due', requireStaff('plans'), (req, res) => {
   const mine = req.user.role === 'counselor' ? 'AND p.counselor_id = ' + req.user.id : '';
   res.json(db.prepare(`SELECT p.*, c.name AS client_name, c.code AS client_code FROM treatment_plans p

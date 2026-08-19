@@ -317,4 +317,26 @@ router.post('/intakes/:id/close', requireStaff('intake'), (req, res) => {
   res.json({ ok: true });
 });
 
+// 刪除來電登記：已建檔（converted）的不能刪，個案資料還連著；誤登的用這個清掉
+router.delete('/intakes/:id', requireStaff('intake'), (req, res) => {
+  const i = db.prepare('SELECT * FROM intakes WHERE id = ?').get(req.params.id);
+  if (!i) return res.status(404).json({ error: '找不到此登記' });
+  if (i.status === 'converted' || i.client_id) {
+    return res.status(400).json({ error: '此登記已建檔為個案，不可刪除；如需結束請用「結束登記」' });
+  }
+  db.prepare('DELETE FROM intakes WHERE id = ?').run(i.id);
+  audit('staff', req.user.id, req.user.name, '刪除來電登記', i.name);
+  res.json({ ok: true });
+});
+
+// 刪除初談問卷連結：已填寫並帶入建檔的不刪，避免抽掉建檔依據
+router.delete('/intake-forms/:id', requireStaff('intake'), (req, res) => {
+  const f = db.prepare('SELECT * FROM intake_forms WHERE id = ?').get(req.params.id);
+  if (!f) return res.status(404).json({ error: '找不到此問卷' });
+  if (f.status === 'used') return res.status(400).json({ error: '此問卷已用於建檔，不可刪除' });
+  db.prepare('DELETE FROM intake_forms WHERE id = ?').run(f.id);
+  audit('staff', req.user.id, req.user.name, '刪除初談問卷', f.name || String(f.id));
+  res.json({ ok: true });
+});
+
 module.exports = router;

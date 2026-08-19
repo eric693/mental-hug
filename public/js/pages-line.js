@@ -71,6 +71,7 @@ App.page('reschedule', {
                  <button class="btn tiny secondary" data-rp="${r.id}">代錄回覆</button>
                  <button class="btn tiny secondary" data-rl="${r.id}">重送群組</button>
                  <button class="btn tiny danger" data-rj="${r.id}">退回</button>`}
+              ${r.status !== 'approved' ? `<button class="btn tiny danger" data-rd="${r.id}">刪除</button>` : ''}
             </td></tr>`;
         }), '目前沒有改期申請');
 
@@ -97,6 +98,13 @@ App.page('reschedule', {
             out.status === 'failed');
             draw();
           } catch (e) { UI.err(e); }
+        };
+      });
+      el.querySelectorAll('[data-rd]').forEach(b => {
+        b.onclick = async () => {
+          if (!await UI.confirm('刪除這筆改期申請？誤建或個案自己取消時才用。')) return;
+          try { await DEL(`/reschedule-requests/${b.dataset.rd}`); UI.toast('已刪除'); draw(); }
+          catch (e) { UI.err(e); }
         };
       });
       el.querySelectorAll('[data-rj]').forEach(b => {
@@ -126,7 +134,10 @@ App.page('reschedule', {
           <li>心理師直接在群組回覆；多筆同時進行時在訊息裡寫 <code>#編號</code> 指定。</li>
           <li>行政人員在這一頁按「簽核改期」填入新時段，系統檢查衝突後才真正改期。</li>
           <li>改期完成同時送到個案的對話框與心理師群組。</li>
-        </ol></div>`;
+        </ol>
+        <div style="font-size:12.5px;color:var(--muted)">
+          完整流程說明、群組 ID 取得方式與憑證設定在
+          <a href="#line">LINE 傳話設定</a>頁。</div></div>`;
     el.querySelector('#st').onchange = draw;
     el.querySelector('#add').onclick = async () => {
       const appts = await GET('/appointments?from=' + UI.today() + '&status=booked');
@@ -217,12 +228,63 @@ App.page('line', {
             ${c.line_group_id ? `<button class="btn tiny secondary" data-test="${UI.esc(c.line_group_id)}">測試訊息</button>` : ''}</td>
         </tr>`))}</div>
 
+      <div class="card"><h3>傳話流程（個案改期／請假）</h3>
+        <div class="flow">
+          <div class="flow-step"><div class="n">1</div><div>
+            <b>個案在官方帳號傳訊</b>
+            <p>訊息含「${UI.esc((st.keywords || '改期,請假').split(',').slice(0, 4).join('、'))}」等關鍵字時視為改期／請假需求（關鍵字可在上方修改）。
+              系統自動找出這位個案<strong>最近一筆未來的有效預約</strong>當作要處理的對象，建立一筆申請單並回覆個案「已收到」。
+              沒帶關鍵字的訊息只會進「個案訊息」由櫃檯回覆，不會打擾心理師。</p></div></div>
+          <div class="flow-step"><div class="n">2</div><div>
+            <b>系統轉到該心理師的群組</b>
+            <p>依主責心理師找他的 LINE 群組（沒設定就用預設群組），把<strong>個案原話</strong>連同原訂時段、申請編號做成卡片送過去。
+              送不出去（沒設群組、憑證未填）也不會卡住：申請單一樣進到「待心理師回覆」。</p></div></div>
+          <div class="flow-step"><div class="n">3</div><div>
+            <b>心理師在群組回覆</b>
+            <p>直接在群組打字即可，系統會把內容記進申請單並回一張確認卡片。
+              同時有多筆進行中時，在訊息裡寫 <code>#編號</code>（例：#12）指定是哪一筆；不寫就記到該群組最新的那一筆。
+              心理師用電話講的，行政可在「改期簽核」頁按<strong>代錄回覆</strong>。</p></div></div>
+          <div class="flow-step"><div class="n">4</div><div>
+            <b>行政人員簽核</b>
+            <p>到「改期簽核」頁按<strong>簽核改期</strong>，填新的日期時間（可換心理師）。
+              系統會先檢查<strong>心理師與諮商室的時段衝突</strong>，通過才真的改期；不同意就按<strong>退回</strong>。</p></div></div>
+          <div class="flow-step"><div class="n">5</div><div>
+            <b>時間表更新＋雙邊同步通知</b>
+            <p>預約直接改到新時段（改期次數 +1、提醒狀態重置），同時送兩張卡片：
+              <strong>個案的官方帳號對話框</strong>（新時間、心理師、據點地址）與<strong>心理師群組</strong>（原訂→改為、簽核人）。
+              每一則收送都留在下方傳話軌跡，含失敗原因。</p></div></div>
+        </div>
+        <div style="font-size:12.5px;color:var(--muted);margin-top:10px">
+          個案身分怎麼對應：請個案加官方帳號好友後傳「<strong>綁定 手機號碼</strong>」（例：綁定 0912345678），
+          系統比對個案資料裡的手機完成綁定。未綁定者傳訊只會收到綁定引導，不會進到改期流程。</div>
+      </div>
+
+      <div class="card"><h3>群組 ID（groupId）怎麼拿到</h3>
+        <div style="font-size:13.5px;line-height:1.9">
+          LINE App 裡<strong>看不到</strong>群組 ID，它只會出現在 LINE 送給系統的 webhook 事件裡。
+          所以正確做法不是去哪裡「查」，而是<strong>讓群組先講一句話</strong>，系統就收得到：
+        </div>
+        <ol style="font-size:13.5px;line-height:1.9;padding-left:20px;margin-top:6px">
+          <li><strong>先確定憑證與 webhook 都通</strong>（上方「驗證憑證」顯示 token 正確、webhook 網址正確）。</li>
+          <li>到 <strong>LINE Official Account Manager → 設定 → 帳號設定</strong>，把
+            「<strong>允許被加入群組／多人聊天室</strong>」打開（預設是關的，沒開就拉不進群組）。</li>
+          <li>把官方帳號<strong>邀請進該心理師的工作群組</strong>。加入當下系統就會收到 join 事件、記下 groupId，
+            並在群組回一張「已加入」卡片。（若已經在群組裡，隨便在群組發一則訊息也可以。）</li>
+          <li>回到這一頁，該群組會出現在上方「<strong>待指派的群組</strong>」，
+            選對應心理師按<strong>指派</strong>即可；也可以按<strong>設為預設</strong>當共用群組，或按<strong>測試訊息</strong>確認送得到。</li>
+        </ol>
+        <div style="font-size:12.5px;color:var(--muted);margin-top:8px">
+          群組 ID 長得像 <code>Cxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx</code>（C 開頭 33 碼）。
+          一位心理師對一個群組；沒設定的心理師會退回預設群組。若群組重建過，ID 會變，重新指派一次即可。
+        </div>
+      </div>
+
       <div class="card"><h3>接上官方帳號的步驟</h3>
         <ol style="font-size:13.5px;line-height:1.9;padding-left:20px">
-          <li>LINE Developers 建立 Messaging API channel，把 <strong>Channel secret</strong> 與 <strong>Channel access token</strong> 貼到上方按儲存。</li>
+          <li>LINE Developers 建立 Messaging API channel，把 <strong>Channel secret</strong> 與 <strong>Channel access token</strong>（long-lived）貼到上方按儲存。</li>
           <li>按「驗證憑證」確認接到的是正確的官方帳號，再按「把 Webhook 網址寫回 LINE 並測試」。</li>
-          <li>官方帳號後台把「自動回覆訊息」關掉（否則機器人的回覆會被蓋掉）。</li>
-          <li>把官方帳號拉進每位心理師的工作群組——群組一有動靜就會出現在「待指派的群組」，按指派即可。</li>
+          <li>官方帳號後台把「<strong>自動回覆訊息</strong>」關掉、「Webhook」開啟（否則機器人的回覆會被系統罐頭訊息蓋掉）。</li>
+          <li>依上一張卡片的說明，把官方帳號拉進各心理師群組並完成指派。</li>
           <li>請個案加官方帳號好友，傳「綁定 手機號碼」完成身分對應。</li>
         </ol>
         <div style="font-size:12.5px;color:var(--muted)">憑證未填之前，流程仍可在系統內完整跑（申請、代錄回覆、簽核改期），只是不會對外送訊息。</div>
