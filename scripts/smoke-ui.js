@@ -36,6 +36,49 @@ function loadPlaywright() {
   return null;
 }
 
+// 版面檢查：抓「看得到但讀不到」的問題。
+// 最常見的是表格儲存格設了 max-width 卻沒解掉 nowrap——文字會溢出去蓋到隔壁欄，
+// 畫面上看起來像被截斷或兩欄疊在一起。純靠肉眼很難每頁都掃到，所以在這裡自動驗。
+async function layoutIssues(page) {
+  return page.evaluate(() => {
+    const out = [];
+    const seen = new Set();
+    const add = m => { if (!seen.has(m)) { seen.add(m); out.push(m); } };
+
+    // 1) 儲存格內容超出自己的寬度（溢出去壓到隔壁欄）
+    for (const td of document.querySelectorAll('#app td, #app th')) {
+      const cs = getComputedStyle(td);
+      if (cs.whiteSpace !== 'nowrap') continue;                 // 有換行就不會溢出
+      if (cs.textOverflow === 'ellipsis' && cs.overflow === 'hidden') continue;  // 刻意截斷
+      if (td.scrollWidth > td.clientWidth + 1) {
+        add(`表格欄位內容溢出：「${(td.textContent || '').trim().slice(0, 24)}…」`);
+      }
+    }
+
+    // 2) 頁面本身出現水平捲動（表格自己的 .table-wrap 可以捲，body 不行）
+    const de = document.documentElement;
+    if (de.scrollWidth > de.clientWidth + 2) {
+      add(`頁面出現水平捲動（內容寬 ${de.scrollWidth}px > 可視 ${de.clientWidth}px）`);
+    }
+
+    // 3) 卡片內容溢出卡片
+    for (const card of document.querySelectorAll('#app .card')) {
+      if (card.scrollWidth > card.clientWidth + 2 && getComputedStyle(card).overflowX === 'visible') {
+        const h = card.querySelector('h3');
+        add(`卡片內容溢出：${h ? h.textContent.trim().slice(0, 20) : '（未命名卡片）'}`);
+      }
+    }
+
+    // 4) 文字被容器裁掉（有固定高度又 overflow:hidden）
+    for (const el of document.querySelectorAll('#app .stat .num, #app .tag, #app .btn')) {
+      if (el.scrollWidth > el.clientWidth + 2 && getComputedStyle(el).overflow === 'hidden') {
+        add(`文字被裁切：「${(el.textContent || '').trim().slice(0, 20)}」`);
+      }
+    }
+    return out;
+  });
+}
+
 (async () => {
   const pw = loadPlaywright();
   if (!pw) {
@@ -78,6 +121,7 @@ function loadPlaywright() {
       const body = (await page.textContent('#page-body').catch(() => '')) || '';
       if (!body.trim()) problems.push(`${acct.label} / #${key}：頁面空白`);
       else if (body.includes('載入中')) problems.push(`${acct.label} / #${key}：卡在載入中`);
+      for (const p2 of await layoutIssues(page)) problems.push(`${acct.label} / #${key}：${p2}`);
     }
 
     // 個案頁的每個分頁（保密邊界會讓不同身分看到不同分頁數）
@@ -93,6 +137,7 @@ function loadPlaywright() {
         const c = (await page.textContent('#tab-body').catch(() => '')) || '';
         if (!c.trim()) problems.push(`${acct.label} / 個案頁 ${t}：空白`);
         else if (c.includes('載入中')) problems.push(`${acct.label} / 個案頁 ${t}：卡在載入中`);
+        for (const p2 of await layoutIssues(page)) problems.push(`${acct.label} / 個案頁 ${t}：${p2}`);
       }
     }
     errs.forEach(e => problems.push(`${acct.label}：${e}`));

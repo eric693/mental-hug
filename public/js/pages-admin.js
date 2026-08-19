@@ -636,7 +636,7 @@ App.page('overdue', {
           <td>${UI.esc(n.target || '-')}</td>
           <td>${n.status === 'sent' ? UI.tag('已送出', 'ok') : n.status === 'failed' ? UI.tag('失敗', 'danger') : UI.tag('人工發送')}
             ${n.error ? '<br><span style="font-size:12px;color:var(--danger)">' + UI.esc(n.error) + '</span>' : ''}</td>
-          <td style="max-width:280px;font-size:12.5px;color:var(--muted)">${UI.esc((n.content || '').slice(0, 60))}</td>
+          <td class="wrap" style="font-size:12.5px;color:var(--muted)">${UI.esc((n.content || '').slice(0, 60))}</td>
         </tr>`), '尚無催繳紀錄')
       });
     };

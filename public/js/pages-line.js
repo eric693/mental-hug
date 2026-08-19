@@ -62,8 +62,8 @@ App.page('reschedule', {
               ${r.client_code ? `<div style="font-size:12px;color:var(--muted)">${UI.esc(r.client_code)}</div>` : ''}</td>
             <td>${UI.esc(r.counselor_name || '未指定')}</td>
             <td style="white-space:nowrap">${r.date ? `${r.date}<br>${r.start_time}-${r.end_time}` : '-'}</td>
-            <td style="font-size:13px;max-width:220px">${UI.nl2br(r.raw_text)}</td>
-            <td style="font-size:13px;max-width:220px">${r.counselor_reply ? UI.nl2br(r.counselor_reply) : '-'}</td>
+            <td class="wrap narrow" style="font-size:13px">${UI.nl2br(r.raw_text)}</td>
+            <td class="wrap narrow" style="font-size:13px">${r.counselor_reply ? UI.nl2br(r.counselor_reply) : '-'}</td>
             <td>${UI.tag(label, tone)}${r.kind === 'cancel' ? UI.tag('請假取消', '') : ''}</td>
             <td style="white-space:nowrap">
               ${['approved', 'rejected'].includes(r.status) ? ''
@@ -208,8 +208,8 @@ App.page('line', {
           把官方帳號拉進心理師的工作群組後，系統就會在這裡列出該群組；
           選一位心理師按「指派」，之後他的個案改期訊息就會轉到那個群組。</div>
         ${UI.table(['群組 ID', '最近訊息', '筆數', '最後時間', ''], st.unassigned_groups.map(g => `<tr>
-          <td style="font-family:monospace;font-size:12px">${UI.esc(g.source_id)}</td>
-          <td style="font-size:13px;max-width:260px">${UI.nl2br(g.last_text || '')}</td>
+          <td><div class="mono-id">${UI.esc(g.source_id)}</div></td>
+          <td class="wrap" style="font-size:13px">${UI.nl2br(g.last_text || '')}</td>
           <td>${g.n}</td><td style="white-space:nowrap">${UI.esc(g.last_at.slice(5, 16))}</td>
           <td style="white-space:nowrap">
             <select data-sel="${UI.esc(g.source_id)}" style="max-width:130px">
@@ -223,7 +223,7 @@ App.page('line', {
       <div class="card"><h3>心理師群組</h3>
         ${UI.table(['心理師', 'LINE 群組 ID', ''], st.counselors.map(c => `<tr>
           <td>${UI.esc(c.name)}</td>
-          <td style="font-family:monospace;font-size:12.5px">${UI.esc(c.line_group_id || '（未設定，改用預設群組）')}</td>
+          <td><div class="mono-id">${UI.esc(c.line_group_id || '（未設定，改用預設群組）')}</div></td>
           <td style="white-space:nowrap"><button class="btn tiny secondary" data-g="${c.id}" data-n="${UI.esc(c.name)}" data-v="${UI.esc(c.line_group_id)}">設定</button>
             ${c.line_group_id ? `<button class="btn tiny secondary" data-test="${UI.esc(c.line_group_id)}">測試訊息</button>` : ''}</td>
         </tr>`))}</div>
@@ -295,9 +295,9 @@ App.page('line', {
           <td style="white-space:nowrap">${UI.esc(e.created_at.slice(5, 16))}</td>
           <td>${e.direction === 'in' ? '收到' : '送出'}</td>
           <td>${e.source_type === 'group' ? '心理師群組' : e.source_type === 'user' ? '個案' : '-'}
-            ${e.source_id ? `<div style="font-family:monospace;font-size:11px;color:var(--muted)">${UI.esc(e.source_id)}</div>` : ''}</td>
+            ${e.source_id ? `<div class="mono-id">${UI.esc(e.source_id)}</div>` : ''}</td>
           <td>${UI.esc(e.client_name || e.counselor_name || '-')}</td>
-          <td style="font-size:13px;max-width:360px">${UI.nl2br(e.text)}</td>
+          <td class="wrap" style="font-size:13px">${UI.nl2br(e.text)}</td>
           <td>${e.status === 'ok' ? UI.tag('正常', 'ok')
     : e.status === 'skipped' ? UI.tag('未送出（' + e.error + '）', 'warn')
       : UI.tag('失敗：' + e.error, 'danger')}</td></tr>`), '尚無傳話紀錄')}

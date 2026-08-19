@@ -48,7 +48,7 @@ App.page('intake', {
           <td><strong>${UI.esc(r.name)}</strong>${r.is_minor ? UI.tag('未成年') : ''}</td>
           <td>${UI.esc(r.phone)}</td>
           <td>${UI.esc(r.source)}${r.partner_name ? '<br><span style="font-size:12px;color:var(--muted)">' + UI.esc(r.partner_name) + '</span>' : ''}</td>
-          <td style="max-width:220px">${UI.esc((r.issue || '').slice(0, 40))}</td>
+          <td class="wrap narrow">${UI.esc((r.issue || '').slice(0, 40))}</td>
           <td>${UI.esc(r.preferred_time || '-')}</td>
           <td>${UI.esc(r.assigned_name || r.preferred_name || '-')}</td>
           <td>${UI.tag(({ low: '低', normal: '一般', high: '高' })[r.urgency], r.urgency === 'high' ? 'danger' : r.urgency === 'normal' ? '' : 'ok')}</td>
@@ -299,7 +299,7 @@ App.page('intake-forms', {
           <td><strong>${UI.esc(r.name || '（未指定）')}</strong>
             ${r.intake_id ? '<br><span style="font-size:12px;color:var(--muted)">已對應來電登記</span>' : ''}</td>
           <td>${UI.esc(r.phone || '-')}</td>
-          <td style="max-width:220px">${UI.esc((r.main_issue || '').slice(0, 40) || '-')}</td>
+          <td class="wrap narrow">${UI.esc((r.main_issue || '').slice(0, 40) || '-')}</td>
           <td>${r.bsrs_total >= 0 ? `${r.bsrs_total} 分 ${r.bsrs_alert ? UI.tag('自殺意念', 'danger') : ''}` : '-'}</td>
           <td>${r.status === 'done' ? UI.tag('已填寫', 'warn')
     : r.status === 'used' ? UI.tag('已建檔', 'ok')

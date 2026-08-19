@@ -93,7 +93,13 @@ a { color: var(--primary); text-decoration: none; }
 .table-wrap { overflow-x: auto; }
 table.list { width: 100%; border-collapse: collapse; font-size: 14px; background: var(--card); border-radius: var(--radius); }
 table.list th, table.list td { padding: 9px 10px; border-bottom: 1px solid var(--border); text-align: left; white-space: nowrap; }
-table.list td.wrap { white-space: normal; min-width: 160px; }
+/* 長文字欄位：一律用 class="wrap"。表格預設 nowrap，只設 max-width 不換行的話
+   內容會溢出蓋到隔壁欄（例如傳話軌跡的訊息內容壓到狀態標籤）。 */
+table.list td.wrap { white-space: normal; min-width: 160px; max-width: 360px; word-break: break-word; }
+table.list td.wrap.narrow { max-width: 220px; }
+/* LINE userId／groupId 這類長字串：等寬字並允許任意位置斷行 */
+.mono-id { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 11.5px;
+  color: var(--muted); word-break: break-all; white-space: normal; max-width: 210px; }
 table.list th { background: #f0f4f6; color: var(--muted); font-weight: 600; font-size: 12.5px; position: sticky; top: 0; }
 table.list tr:hover td { background: #f8fbfb; }
 
