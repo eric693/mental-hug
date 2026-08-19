@@ -65,6 +65,32 @@ router.get('/notes/:id', requireStaff('notes'), (req, res) => {
   res.json(n);
 });
 
+// 諮商紀錄列印版：帶機構抬頭與心理師署名，供轉介、法院調閱或個案申請時輸出。
+// 權限與調閱一致（主責心理師／督導／管理者），且列印一樣寫入稽核軌跡。
+router.get('/notes/:id/print', requireStaff('notes'), (req, res) => {
+  const n = db.prepare(`SELECT n.*, u.name AS counselor_name, u.license_type, u.license_no,
+      c.name AS client_name, c.code AS client_code, c.birth_date, c.gender,
+      a.date AS appt_date, a.start_time, a.end_time, a.type AS appt_type, a.mode
+    FROM session_notes n
+    LEFT JOIN users u ON u.id = n.counselor_id
+    LEFT JOIN clients c ON c.id = n.client_id
+    LEFT JOIN appointments a ON a.id = n.appointment_id
+    WHERE n.id = ?`).get(req.params.id);
+  if (!n) return res.status(404).json({ error: '找不到此紀錄' });
+  if (!canViewNote(req.user, n)) return res.status(403).json({ error: '晤談紀錄僅限主責心理師、督導與管理者存取' });
+  audit('staff', req.user.id, req.user.name, '列印晤談紀錄', n.client_code, { note_id: n.id });
+  res.json({
+    ...n,
+    printed_by: req.user.name,
+    printed_at: nowStamp(),
+    center_name: getSetting('center_name'),
+    center_phone: getSetting('center_phone'),
+    center_address: getSetting('center_address'),
+    center_license_no: getSetting('center_license_no'),
+    center_director: getSetting('center_director')
+  });
+});
+
 router.post('/notes', requireStaff('notes'), requireNoteAccess, (req, res) => {
   const b = req.body || {};
   if (req.user.role === 'staff') return res.status(403).json({ error: '僅心理師可撰寫晤談紀錄' });

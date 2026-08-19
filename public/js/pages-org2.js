@@ -167,15 +167,25 @@ App.page('partners', {
 
 // ---- 請假與繼續教育 ----
 App.page('hr', {
-  title: '請假與繼續教育',
-  sub: '請假期間不會出現在可預約時段；繼續教育積分供執照更新佐證',
+  get title() { return App.feature('ce') ? '請假與繼續教育' : '請假管理'; },
+  get sub() {
+    return App.feature('ce')
+      ? '請假期間不會出現在可預約時段；繼續教育積分供執照更新佐證'
+      : '請假期間不會出現在可預約時段';
+  },
   module: 'hr',
   async render(el) {
-    const [offs, ce, list] = await Promise.all([GET('/time-off'), GET('/ce-summary'), GET('/ce-credits')]);
+    // 繼續教育關閉時只留請假，仍照常取 ce 資料會浪費一次查詢，故條件取用
+    const withCe = App.feature('ce');
+    const [offs, ce, list] = await Promise.all([
+      GET('/time-off'),
+      withCe ? GET('/ce-summary') : Promise.resolve({ rows: [], cycle: 0, required: 0, required_special: 0, required_ethics: 0 }),
+      withCe ? GET('/ce-credits') : Promise.resolve([])
+    ]);
     el.innerHTML = `<div class="toolbar"><div class="spacer"></div>
         <button class="btn secondary" id="addoff">登錄請假</button>
-        <button class="btn" id="addce">登錄積分</button></div>
-      <div class="card"><h3>執照與繼續教育（每 ${ce.cycle} 年需 ${ce.required} 點，其中品質／倫理／法規合計 ${ce.required_special} 點、專業倫理另需 ${ce.required_ethics} 點）</h3>
+        ${withCe ? '<button class="btn" id="addce">登錄積分</button>' : ''}</div>
+      ${withCe ? `<div class="card"><h3>執照與繼續教育（每 ${ce.cycle} 年需 ${ce.required} 點，其中品質／倫理／法規合計 ${ce.required_special} 點、專業倫理另需 ${ce.required_ethics} 點）</h3>
         ${UI.table(['心理師', '證照', '執照更新日', '剩餘天數', '本週期積分', '特定類別', '專業倫理', '狀態'], ce.rows.map(r => `<tr>
           <td>${UI.esc(r.name)}</td><td>${UI.esc(r.license_type || '-')}</td>
           <td>${r.license_expiry || '未填'}</td>
@@ -185,7 +195,7 @@ App.page('hr', {
           <td${r.ethics_credits < ce.required_ethics ? ' style="color:var(--danger);font-weight:600"' : ''}>${r.ethics_credits} / ${ce.required_ethics}</td>
           <td>${r.ok ? UI.tag('已達標', 'ok') : UI.tag('尚未達標', 'warn')}</td></tr>`))}
         <div style="font-size:12.5px;color:var(--muted);margin-top:8px">
-          計算區間為執照更新日往前推 ${ce.cycle} 年；實際規定以主管機關公告為準。</div></div>
+          計算區間為執照更新日往前推 ${ce.cycle} 年；實際規定以主管機關公告為準。</div></div>` : ''}
       <div class="card"><h3>請假／不可預約時段</h3>
         ${UI.table(['心理師', '期間', '時段', '事由', ''], offs.map(o => `<tr>
           <td>${UI.esc(o.counselor_name)}</td>
@@ -193,12 +203,12 @@ App.page('hr', {
           <td>${o.all_day ? '全天' : `${o.start_time}-${o.end_time}`}</td>
           <td>${UI.esc(o.reason || '-')}</td>
           <td><button class="btn tiny danger" data-do="${o.id}">刪除</button></td></tr>`), '目前沒有請假紀錄')}</div>
-      <div class="card"><h3>繼續教育明細</h3>
+      ${withCe ? `<div class="card"><h3>繼續教育明細</h3>
         ${UI.table(['日期', '心理師', '課程', '主辦', '類別', '時數', '積分', ''], list.map(c => `<tr>
           <td>${c.date}</td><td>${UI.esc(c.user_name)}</td><td>${UI.esc(c.title)}</td>
           <td>${UI.esc(c.organizer || '-')}</td><td>${UI.esc(c.category)}</td>
           <td>${c.hours}</td><td>${c.credits}</td>
-          <td><button class="btn tiny danger" data-dc="${c.id}">刪除</button></td></tr>`), '尚無積分紀錄')}</div>`;
+          <td><button class="btn tiny danger" data-dc="${c.id}">刪除</button></td></tr>`), '尚無積分紀錄')}</div>` : ''}`;
 
     el.querySelector('#addoff').onclick = () => UI.modal({
       title: '登錄請假／不可預約',
@@ -214,7 +224,7 @@ App.page('hr', {
       </div>`,
       onSubmit: async e => { await POST('/time-off', UI.formData(e)); UI.toast('已登錄'); App.go('hr'); }
     });
-    el.querySelector('#addce').onclick = () => UI.modal({
+    if (withCe) el.querySelector('#addce').onclick = () => UI.modal({
       title: '登錄繼續教育積分',
       body: `<div class="form-grid">
         ${UI.select('user_id', '心理師', App.counselorOptions(), { value: App.me.id })}

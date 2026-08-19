@@ -141,7 +141,10 @@ if (!has('SELECT 1 FROM clients')) {
   db.prepare('INSERT INTO messages (client_id, sender, content) VALUES (?, ?, ?)').run(c1, 'client', '請問下週三可以改成下午四點嗎？');
 }
 
-setSetting('center_name', 'MindCare 心理諮商所');
+setSetting('center_name', '擁抱心理諮商所');
+// 展示／測試資料要涵蓋全部功能，故一律開齊模組（正式站在系統設定的「模組啟用」自行取捨）
+setSetting('disabled_modules', '');
+setSetting('feature_ce', '1');
 console.log('展示資料已建立：admin / mindcare123，心理師 lin / 123456，個案端 0912345678 / 345678');
 
 // ---- 第二階段展示資料：合作單位、來電登記、請假、繼續教育、團體 ----

@@ -445,3 +445,44 @@ CREATE TABLE IF NOT EXISTS group_attendance (
   note TEXT NOT NULL DEFAULT '',
   UNIQUE(session_id, client_id)
 );
+
+-- ---- LINE 傳話機器人 ----
+-- 官方帳號收到個案的請假／改期訊息後轉給該心理師的 LINE 群組，
+-- 心理師在群組回覆，行政人員於系統簽核後才真正改期，並同步回覆兩邊。
+CREATE TABLE IF NOT EXISTS reschedule_requests (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  appointment_id INTEGER REFERENCES appointments(id) ON DELETE SET NULL,
+  client_id INTEGER REFERENCES clients(id) ON DELETE SET NULL,
+  counselor_id INTEGER REFERENCES users(id),
+  kind TEXT NOT NULL DEFAULT 'reschedule',     -- reschedule 改期 / cancel 請假取消 / other 其他詢問
+  source TEXT NOT NULL DEFAULT 'line',         -- line 官方帳號 / staff 櫃檯代錄
+  raw_text TEXT NOT NULL DEFAULT '',           -- 個案原話
+  status TEXT NOT NULL DEFAULT 'new',          -- new 待轉達 / relayed 已轉心理師 / replied 心理師已回 / approved 已簽核改期 / rejected 已退回 / closed 已結束
+  relayed_at TEXT NOT NULL DEFAULT '',
+  counselor_reply TEXT NOT NULL DEFAULT '',
+  replied_at TEXT NOT NULL DEFAULT '',
+  new_date TEXT NOT NULL DEFAULT '',
+  new_start_time TEXT NOT NULL DEFAULT '',
+  new_end_time TEXT NOT NULL DEFAULT '',
+  approved_by INTEGER REFERENCES users(id),
+  approved_at TEXT NOT NULL DEFAULT '',
+  decision_note TEXT NOT NULL DEFAULT '',
+  created_at TEXT NOT NULL DEFAULT (datetime('now','localtime'))
+);
+CREATE INDEX IF NOT EXISTS idx_resched_status ON reschedule_requests(status, created_at);
+
+-- LINE 收送訊息軌跡：只留傳話本文，不含晤談內容
+CREATE TABLE IF NOT EXISTS line_events (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  direction TEXT NOT NULL,                     -- in 收到 / out 送出
+  source_type TEXT NOT NULL DEFAULT '',        -- user 個案 / group 心理師群組 / system
+  source_id TEXT NOT NULL DEFAULT '',          -- LINE userId / groupId
+  client_id INTEGER REFERENCES clients(id) ON DELETE SET NULL,
+  counselor_id INTEGER REFERENCES users(id),
+  request_id INTEGER REFERENCES reschedule_requests(id) ON DELETE SET NULL,
+  text TEXT NOT NULL DEFAULT '',
+  status TEXT NOT NULL DEFAULT 'ok',           -- ok / failed / skipped
+  error TEXT NOT NULL DEFAULT '',
+  created_at TEXT NOT NULL DEFAULT (datetime('now','localtime'))
+);
+CREATE INDEX IF NOT EXISTS idx_line_events_time ON line_events(created_at);

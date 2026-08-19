@@ -391,9 +391,13 @@ App.page('client', {
             <td>${n.locked ? UI.tag(n.review_status === 'approved' ? '已覆核定稿' : '已簽核', 'ok')
     : n.review_status === 'pending' ? UI.tag('待督導覆核', 'warn')
       : n.review_status === 'returned' ? UI.tag('退回補正', 'danger') : UI.tag('草稿', 'warn')}</td>
-            <td><button class="btn tiny secondary" data-n="${n.id}">${n.locked ? '檢視' : n.review_status === 'pending' ? '覆核／檢視' : '編輯'}</button></td></tr>`), '尚無晤談紀錄')}</div>`;
+            <td><button class="btn tiny secondary" data-n="${n.id}">${n.locked ? '檢視' : n.review_status === 'pending' ? '覆核／檢視' : '編輯'}</button>
+              <button class="btn tiny secondary" data-np="${n.id}">列印</button></td></tr>`), '尚無晤談紀錄')}</div>`;
         body.querySelectorAll('[data-n]').forEach(b => {
           b.onclick = () => noteDialog({ id: Number(b.dataset.n), client_id: c.id }, () => tabsRefresh('notes'));
+        });
+        body.querySelectorAll('[data-np]').forEach(b => {
+          b.onclick = () => notePrint(Number(b.dataset.np));
         });
       }
 
@@ -602,7 +606,11 @@ App.page('client', {
             ${UI.table(['日期', '項目', '金額', '付款人別', '狀態', '收據號'], c.invoices.map(i => `<tr>
               <td>${i.date}</td><td>${UI.esc(i.item)}</td><td>${UI.fmtMoney(i.amount)}</td>
               <td>${UI.esc(i.payer)}</td><td>${stateTag('inv_status', i.status)}</td>
-              <td>${UI.esc(i.receipt_no || '-')}</td></tr>`), '無收費紀錄')}</div>`;
+              <td>${UI.esc(i.receipt_no || '-')}</td></tr>`), '無收費紀錄')}
+            <button class="btn small secondary" id="sumreceipt" style="margin-top:12px">開立期間彙總收據</button>
+            <div style="font-size:12.5px;color:var(--muted);margin-top:6px">
+              個案報稅、保險理賠或公司補助核銷時用：把選定期間內已收款的項目列成一張收據。</div></div>`;
+        body.querySelector('#sumreceipt').onclick = () => receiptSummaryDialog(c);
       }
 
       if (key === 'summary') {
@@ -643,3 +651,99 @@ const SCALE_NAMES = {
   PSS10: 'PSS-10 知覺壓力',
   ISI: 'ISI 失眠嚴重度'
 };
+
+// ---- 諮商紀錄列印 ----
+// 轉介、法院調閱或個案申請時需要紙本；權限與線上調閱相同，且列印一樣寫入稽核軌跡。
+async function notePrint(id) {
+  const n = await GET(`/notes/${id}/print`);
+  const field = (label, value) => `<div class="doc-field"><span>${UI.esc(label)}</span><span>${UI.esc(value || '-')}</span></div>`;
+  const section = (label, value) => `<div class="doc-section"><h4>${UI.esc(label)}</h4>
+    <div class="body">${UI.esc(value || '（未填）')}</div></div>`;
+  UI.modal({
+    title: '諮商紀錄（列印版）', wide: true, hideFooter: true,
+    body: `<div class="print-doc">
+      <div class="doc-title">心理諮商紀錄</div>
+      <div class="doc-org">${UI.esc(n.center_name)}
+        ${n.center_license_no ? '　開業執照字號：' + UI.esc(n.center_license_no) : ''}
+        ${n.center_phone ? '　' + UI.esc(n.center_phone) : ''}</div>
+      ${field('個案編號', n.client_code)}
+      ${field('個案姓名', n.client_name)}
+      ${field('晤談日期', `${n.date}${n.start_time ? `　${n.start_time}-${n.end_time}` : ''}　（第 ${n.session_no} 次，${n.duration_min} 分鐘）`)}
+      ${field('晤談形式', `${TW.appt_type[n.appt_type] || '個別諮商'}${n.mode === 'online' ? '／視訊' : ''}`)}
+      ${field('心理師', `${n.counselor_name || ''}${n.license_type ? `（${n.license_type}${n.license_no ? ' 證書字號 ' + n.license_no : ''}）` : ''}`)}
+      ${section('主觀陳述（S）', n.subjective)}
+      ${section('客觀觀察（O）', n.objective)}
+      ${section('評估與概念化（A）', n.assessment)}
+      ${section('處遇計畫（P）', n.plan)}
+      ${section('介入技術／取向', n.intervention)}
+      ${n.homework ? section('家庭作業', n.homework) : ''}
+      ${n.risk_flag && n.risk_flag !== 'none'
+    ? section('風險評估', `${TW.risk_flag[n.risk_flag] || n.risk_flag}\n${n.risk_note || ''}`) : ''}
+      <div class="doc-foot">
+        紀錄狀態：${n.locked ? `已簽核定稿（${UI.esc(n.signed_at || '')}）` : '草稿，尚未簽核'}
+        ${n.review_status === 'approved' ? '；已經督導覆核' : ''}<br>
+        列印人：${UI.esc(n.printed_by)}　列印時間：${UI.esc(n.printed_at)}<br>
+        本紀錄屬《心理師法》規範之業務紀錄，僅限法定用途使用，不得任意複製或轉交第三人。
+        ${n.center_director ? '<br>負責心理師：' + UI.esc(n.center_director) : ''}
+      </div>
+      <div style="margin-top:26px">心理師簽章：＿＿＿＿＿＿＿＿　　（諮商所用印）</div>
+    </div>
+    <button class="btn small secondary no-print" style="margin-top:14px" onclick="window.print()">列印</button>`
+  });
+}
+
+// ---- 期間彙總收據 ----
+function receiptSummaryDialog(c) {
+  const to = UI.today();
+  const from = to.slice(0, 4) + '-01-01';
+  UI.modal({
+    title: '開立期間彙總收據',
+    submitText: '產生',
+    body: `<div class="form-grid">
+      ${UI.input('from', '起始日', { type: 'date', value: from })}
+      ${UI.input('to', '結束日', { type: 'date', value: to })}</div>
+      <div style="font-size:12.5px;color:var(--muted);margin-top:8px">只列入期間內「已收款」的項目；未收款與作廢不列入，退費另行標示。</div>`,
+    onSubmit: async e => {
+      const d = UI.formData(e);
+      const r = await GET(`/clients/${c.id}/receipt-summary?from=${d.from}&to=${d.to}`);
+      showReceiptSummary(r);
+    }
+  });
+}
+
+function showReceiptSummary(r) {
+  UI.modal({
+    title: '期間彙總收據', wide: true, hideFooter: true,
+    body: `<div class="print-doc">
+      <div class="doc-title">繳費證明（收據）</div>
+      <div class="doc-org">${UI.esc(r.center_name)}
+        ${r.center_tax_id ? '　統一編號：' + UI.esc(r.center_tax_id) : ''}
+        ${r.center_license_no ? '　開業執照字號：' + UI.esc(r.center_license_no) : ''}</div>
+      <div class="doc-field"><span>個案姓名</span><span>${UI.esc(r.client.name)}（編號 ${UI.esc(r.client.code)}）</span></div>
+      ${r.client.id_no ? `<div class="doc-field"><span>身分證號</span><span>${UI.esc(r.client.id_no)}</span></div>` : ''}
+      <div class="doc-field"><span>費用期間</span><span>${UI.esc(r.from)} ～ ${UI.esc(r.to)}</span></div>
+      <div class="doc-field"><span>繳費次數</span><span>${r.sessions} 次</span></div>
+      <table class="doc">
+        <thead><tr><th>日期</th><th>項目</th><th>付款方式</th><th>收據號</th><th style="text-align:right">金額</th></tr></thead>
+        <tbody>${r.rows.map(i => `<tr><td>${i.date}</td><td>${UI.esc(i.item)}</td>
+          <td>${UI.esc(i.method || '-')}</td><td>${UI.esc(i.receipt_no || '-')}</td>
+          <td style="text-align:right">${UI.fmtMoney(i.amount)}</td></tr>`).join('')
+    || '<tr><td colspan="5">此期間沒有已收款紀錄</td></tr>'}</tbody>
+        <tfoot><tr><th colspan="4" style="text-align:right">合計實收</th>
+          <th style="text-align:right">${UI.fmtMoney(r.total)}</th></tr>
+          ${r.refunded ? `<tr><th colspan="4" style="text-align:right">期間退費</th>
+            <th style="text-align:right">-${UI.fmtMoney(r.refunded)}</th></tr>
+          <tr><th colspan="4" style="text-align:right">淨額</th>
+            <th style="text-align:right">${UI.fmtMoney(r.net)}</th></tr>` : ''}</tfoot>
+      </table>
+      <div class="doc-foot">
+        茲證明上列心理諮商費用業已收訖，特此證明。<br>
+        ${UI.esc(r.center_address || '')}　${UI.esc(r.center_phone || '')}
+        ${r.center_director ? '<br>負責心理師：' + UI.esc(r.center_director) : ''}<br>
+        開立人：${UI.esc(r.issued_by)}　開立時間：${UI.esc(r.issued_at)}
+      </div>
+      <div style="margin-top:26px">收款人：＿＿＿＿＿＿＿＿　　（諮商所用印）</div>
+    </div>
+    <button class="btn small secondary no-print" style="margin-top:14px" onclick="window.print()">列印</button>`
+  });
+}

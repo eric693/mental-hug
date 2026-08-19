@@ -1,15 +1,15 @@
-# 系統介紹 PDF（public/mindcare-intro.pdf）
+# 系統介紹 PDF（public/mental-hug-intro.pdf）
 
 介紹用 DM，內含線上試用連結與 QR，公開網址（免登入）：
-https://mindcare.crownai.ink/mindcare-intro.pdf
+https://mental-hug.crownai.ink/mental-hug-intro.pdf
 
 ## 重新產生
 
 ```bash
 cd docs/brochure
 npm i                 # 唯一相依 qrcode（不進主專案 package.json）
-node build.js         # 產出 mindcare-intro.pdf
-cp mindcare-intro.pdf ../../public/mindcare-intro.pdf
+node build.js         # 產出 mental-hug-intro.pdf
+cp mental-hug-intro.pdf ../../public/mental-hug-intro.pdf
 ```
 
 - 改內容編輯 `brochure.html`；`{{QR_STAFF}}` / `{{QR_CLIENT}}` 由 build.js 置換成 QR data URI。
@@ -19,7 +19,7 @@ cp mindcare-intro.pdf ../../public/mindcare-intro.pdf
 - 版面靠自然分頁，勿加強制 pagebreak，否則會出現整頁留白。
   目前為 5 頁，各頁填充率 86–96%。增補內容後請確認最後一頁不是只剩零星幾行，
   必要時壓縮頁尾或刪減卡片文字；判斷方式見下方「產出檢查」。
-- 內容更新後務必 `cp mindcare-intro.pdf ../../public/`，公開網址才會換成新版（同一 URL，不必換連結）。
+- 內容更新後務必 `cp mental-hug-intro.pdf ../../public/`，公開網址才會換成新版（同一 URL，不必換連結）。
 - 系統有新功能時記得同步這份，否則對外文件會與實際功能脫節。
   文件中會隨版本變動的數字：**19 個模組、5 份報表、5 種量表**，改動時一併更新首頁統計列、
   「統計報表與匯出」卡片與「安全與資料保全」段落。模組數以 `src/auth.js` 的 `MODULES` 為準，
@@ -33,9 +33,9 @@ cp mindcare-intro.pdf ../../public/mindcare-intro.pdf
 ## 產出檢查
 
 ```bash
-pdfinfo mindcare-intro.pdf | grep Pages          # 目前 5 頁
-pdftoppm -png -r 60 mindcare-intro.pdf pg        # 轉圖目視檢查版面
-curl -sI https://mindcare.crownai.ink/mindcare-intro.pdf | head -3
+pdfinfo mental-hug-intro.pdf | grep Pages          # 目前 5 頁
+pdftoppm -png -r 60 mental-hug-intro.pdf pg        # 轉圖目視檢查版面
+curl -sI https://mental-hug.crownai.ink/mental-hug-intro.pdf | head -3
 rm -f pg-*.png build.html                        # 檢查完清掉中間產物
 ```
 

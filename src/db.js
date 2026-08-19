@@ -29,7 +29,13 @@ ensureColumns('clients', {
   partner_id: 'INTEGER REFERENCES partners(id)',     // 合作單位（學校／EAP／社會局委託案）
   id_no: "TEXT NOT NULL DEFAULT ''"                  // 身分證統一編號／居留證號（通報與補助核銷用）
 });
+ensureColumns('clients', {
+  // LINE 官方帳號綁定：個案在官方帳號傳訊時據此對應到個案
+  line_user_id: "TEXT NOT NULL DEFAULT ''"
+});
 ensureColumns('users', {
+  // 該心理師的 LINE 群組：個案的請假／改期訊息轉達到這裡等回覆
+  line_group_id: "TEXT NOT NULL DEFAULT ''",
   // 心理師的固定視訊會議室連結：排視訊晤談時自動帶入，不必每次貼
   meeting_room_url: "TEXT NOT NULL DEFAULT ''",
   // 行事曆訂閱（.ics）用的隨機字串：手機日曆以網址訂閱，故不走 Cookie 驗證。
@@ -203,10 +209,10 @@ CREATE INDEX IF NOT EXISTS idx_intakeform_status ON intake_forms(status, created
 
 // 前台可編輯文字（系統設定頁維護；清空即隱藏該區塊）
 const UI_TEXT_DEFAULTS = {
-  ui_staff_login_title: 'MindCare 心理諮商所',
-  ui_staff_login_sub: '諮商所管理系統',
+  ui_staff_login_title: '擁抱心理',
+  ui_staff_login_sub: '擁抱心理，擁抱愛與自己',
   ui_demo_staff: '展示用測試帳號\n管理者：admin / mindcare123\n諮商師：lin / 123456',
-  ui_portal_title: 'MindCare 個案專區',
+  ui_portal_title: '擁抱心理 個案專區',
   ui_portal_login_sub: '預約、量表填寫與費用查詢',
   ui_portal_login_hint: '首次登入密碼為手機末 6 碼；忘記密碼請來電諮商所。',
   ui_demo_portal: '展示用測試帳號\n個案：0912345678 / 345678',
@@ -218,7 +224,7 @@ const UI_TEXT_KEYS = Object.keys(UI_TEXT_DEFAULTS);
 {
   const SETTING_DEFAULTS = {
     ...UI_TEXT_DEFAULTS,
-    center_name: 'MindCare 心理諮商所',
+    center_name: '擁抱心理諮商所',
     center_phone: '',
     center_address: '',
     // 機構登記資料：收據／報表抬頭與核銷文件需載明
@@ -302,6 +308,28 @@ const UI_TEXT_KEYS = Object.keys(UI_TEXT_DEFAULTS);
     // 個案端自填初談問卷連結的有效天數
     intake_form_days: '14',
     partner_types: '學校,企業EAP,政府社政,司法轉介,醫療院所,其他',
+    // ---- LINE 傳話機器人 ----
+    // 官方帳號 Messaging API 憑證；未填則 webhook 一律拒收、系統不對外送出任何訊息
+    line_channel_secret: '',
+    line_channel_token: '',
+    // 找不到心理師專屬群組時的預設群組（留空則只留在系統待簽核清單，不外送）
+    line_default_group_id: '',
+    // 個案在官方帳號輸入哪些字視為請假／改期（逗號分隔）
+    line_keywords: '改期,請假,取消,調整時間,換時間,不能來,無法出席',
+    // 轉達給心理師群組的訊息範本
+    line_relay_template: '【改期／請假申請 #{req}】\n個案：{client}（{code}）\n原訂：{date}（{weekday}）{time}\n個案訊息：{text}\n\n請直接在群組回覆可否改期與建議時段，行政人員會據以簽核。',
+    // 個案未綁定時的引導語
+    line_bind_hint: '您好，這裡是{center}。為了確認您的身分，請先傳送「綁定 您的手機號碼」（例如：綁定 0912345678），之後即可於此傳達請假或改期需求。',
+    // 收到個案訊息後的自動回覆
+    line_ack_client: '已收到您的訊息，我們會轉達給您的心理師，確認後再回覆您。若為緊急事項請直接來電 {phone}。',
+    // 簽核完成後回覆個案與群組的範本
+    line_done_client: '{client} 您好，您的晤談已改期為 {new_date}（{new_weekday}）{new_time}，心理師 {counselor}。如有問題請來電 {phone}。—— {center}',
+    line_done_group: '【已簽核 #{req}】{client}（{code}）原訂 {date} {time} 已改期為 {new_date}（{new_weekday}）{new_time}。',
+    line_reject_client: '{client} 您好，關於您提出的改期需求，請來電 {phone} 與我們確認後續安排。—— {center}',
+    // 未啟用模組（逗號分隔的模組代碼）：側欄不出現、API 一律 403，權限勾選保留不動
+    disabled_modules: 'partners,risk,supervision',
+    // 細項開關：繼續教育積分區塊（關閉後「請假與繼續教育」只留請假）
+    feature_ce: '0',
     time_off_reasons: '特休,病假,事假,研習,督導,公假,其他',
     group_topics: '情緒調適,人際關係,壓力管理,親職教養,悲傷輔導,正念練習'
   };

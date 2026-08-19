@@ -20,7 +20,10 @@ const App = {
 
   onUnauthorized() { if (App.me) { App.me = null; App.renderLogin(); } },
 
-  can(module) { return App.me && (App.me.role === 'admin' || App.me.modules.includes(module)); },
+  can(module) { return App.me && App.me.modules.includes(module); },
+  // 模組是否啟用（與個人權限無關）：看板區塊、統計磚以此決定要不要出現
+  modOn(module) { return App.me ? !(App.me.disabled_modules || []).includes(module) : true; },
+  feature(key) { return !App.me || !App.me.features || App.me.features[key] !== false; },
   isCounselor() { return App.me && ['counselor', 'supervisor', 'admin'].includes(App.me.role); },
 
   listOptions(key, fallback = []) {
@@ -52,7 +55,7 @@ const App = {
     document.getElementById('app').innerHTML = `
       <div class="login-wrap">
         <div class="login-card">
-          <h1>${UI.esc(t.ui_staff_login_title || 'MindCare 心理諮商所')}</h1>
+          <h1>${UI.esc(t.ui_staff_login_title || '擁抱心理諮商所')}</h1>
           <div class="sub">${UI.esc(t.ui_staff_login_sub || '諮商所管理系統')}</div>
           <div class="form-row"><label>帳號</label><input id="lg-user" autocomplete="username"></div>
           <div class="form-row"><label>密碼</label><input id="lg-pass" type="password" autocomplete="current-password"></div>
@@ -78,10 +81,10 @@ const App = {
   },
 
   navGroups: [
-    { label: '每日作業', keys: ['dashboard', 'my', 'calendar', 'schedule', 'myshift', 'waitlist', 'today', 'reminders', 'notes-pending', 'notes-review', 'messages'] },
+    { label: '每日作業', keys: ['dashboard', 'my', 'calendar', 'schedule', 'myshift', 'waitlist', 'today', 'reminders', 'notes-pending', 'notes-review', 'messages', 'reschedule'] },
     { label: '個案服務', keys: ['intake', 'intake-forms', 'clients', 'groups', 'assessments', 'risk', 'safety', 'follow-ups', 'consents'] },
     { label: '專業與營運', keys: ['supervision', 'hr', 'payouts', 'billing', 'overdue', 'packages', 'partners', 'announcements', 'reports'] },
-    { label: '系統', keys: ['users', 'settings', 'imports', 'retention', 'audit'] }
+    { label: '系統', keys: ['users', 'settings', 'line', 'imports', 'retention', 'audit'] }
   ],
 
   renderLayout() {
@@ -105,7 +108,7 @@ const App = {
       <div class="backdrop" id="backdrop"></div>
       <div class="layout">
         <aside class="sidebar" id="sidebar">
-          <div class="brand">${UI.esc(App.me.center_name)}<small>MindCare 諮商所管理系統</small></div>
+          <div class="brand">${UI.esc(App.me.center_name)}<small>諮商所管理系統</small></div>
           <nav class="nav" id="nav">${navHtml}</nav>
           <div class="user-box">
             <div class="name">${UI.esc(App.me.name)}</div>
@@ -170,7 +173,7 @@ App.page('dashboard', {
         <div class="stat clickable" onclick="location.hash='clients'"><div class="num">${d.active_clients}</div><div class="label">服務中個案${scopeNote}</div></div>
         <div class="stat"><div class="num">${d.today_appointments.length}</div><div class="label">今日晤談</div></div>
         <div class="stat clickable" onclick="location.hash='clients'"><div class="num ${d.high_risk ? 'danger' : ''}">${d.high_risk}</div><div class="label">高風險個案</div></div>
-        <div class="stat clickable" onclick="location.hash='risk'"><div class="num ${d.open_risk_events ? 'danger' : ''}">${d.open_risk_events}</div><div class="label">追蹤中危機事件</div></div>
+        ${App.modOn('risk') ? `<div class="stat clickable" onclick="location.hash='risk'"><div class="num ${d.open_risk_events ? 'danger' : ''}">${d.open_risk_events}</div><div class="label">追蹤中危機事件</div></div>` : ''}
         <div class="stat clickable" onclick="location.hash='notes-pending'"><div class="num ${d.pending_notes ? 'warn' : ''}">${d.pending_notes}</div><div class="label">待補晤談紀錄</div></div>
         <div class="stat"><div class="num">${d.week_sessions}</div><div class="label">近七日完成晤談</div></div>
         <div class="stat"><div class="num">${d.month_sessions}</div><div class="label">本月完成晤談</div></div>
@@ -180,11 +183,11 @@ App.page('dashboard', {
         <div class="stat clickable" onclick="location.hash='assessments'"><div class="num">${d.pending_tasks}</div><div class="label">待填量表</div></div>
         <div class="stat clickable" onclick="location.hash='intake'"><div class="num ${d.pending_intakes ? 'warn' : ''}">${d.pending_intakes}</div><div class="label">待處理來電</div></div>
         <div class="stat clickable" onclick="location.hash='reminders'"><div class="num ${d.tomorrow_unreminded ? 'warn' : ''}">${d.tomorrow_unreminded}/${d.tomorrow_count}</div><div class="label">明日待提醒</div></div>
-        <div class="stat clickable" onclick="location.hash='partners'"><div class="num ${d.unsettled ? 'warn' : ''}">${d.unsettled}</div><div class="label">未結請款單</div></div>
-        <div class="stat clickable" onclick="location.hash='groups'"><div class="num">${d.running_groups}</div><div class="label">進行中團體</div></div>
+        ${App.modOn('partners') ? `<div class="stat clickable" onclick="location.hash='partners'"><div class="num ${d.unsettled ? 'warn' : ''}">${d.unsettled}</div><div class="label">未結請款單</div></div>` : ''}
+        ${App.modOn('groups') ? `<div class="stat clickable" onclick="location.hash='groups'"><div class="num">${d.running_groups}</div><div class="label">進行中團體</div></div>` : ''}
         <div class="stat clickable" onclick="location.hash='waitlist'"><div class="num ${d.open_slots ? 'warn' : ''}">${d.open_slots}</div><div class="label">可遞補時段（候補 ${d.waitlist_count} 人）</div></div>
-        <div class="stat clickable" onclick="location.hash='safety'"><div class="num ${d.safety.missing ? 'danger' : ''}">${d.safety.missing}</div><div class="label">高風險未建安全計畫</div></div>
-        <div class="stat clickable" onclick="location.hash='safety'"><div class="num ${d.safety.due ? 'warn' : ''}">${d.safety.due}</div><div class="label">安全計畫逾檢視日</div></div>
+        ${App.modOn('risk') ? `<div class="stat clickable" onclick="location.hash='safety'"><div class="num ${d.safety.missing ? 'danger' : ''}">${d.safety.missing}</div><div class="label">高風險未建安全計畫</div></div>
+        <div class="stat clickable" onclick="location.hash='safety'"><div class="num ${d.safety.due ? 'warn' : ''}">${d.safety.due}</div><div class="label">安全計畫逾檢視日</div></div>` : ''}
         ${d.notes_pending_review ? `<div class="stat clickable" onclick="location.hash='notes-review'">
           <div class="num warn">${d.notes_pending_review}</div><div class="label">實習生紀錄待覆核</div></div>` : ''}
       </div>
@@ -233,11 +236,11 @@ App.page('dashboard', {
         ${UI.table(['預定檢視日', '個案'], d.due_plans.map(p => `<tr><td>${p.review_date}</td>
           <td><a href="#client/${p.client_id || ''}">${UI.esc(p.client_name)}（${p.client_code}）</a></td></tr>`))}
       </div>` : ''}
-      ${(d.license_alerts.length || d.partner_expiring.length) ? `<div class="card"><h3>證照與契約到期</h3>
+      ${((App.feature('ce') && d.license_alerts.length) || (App.modOn('partners') && d.partner_expiring.length)) ? `<div class="card"><h3>證照與契約到期</h3>
         <div style="display:flex;flex-direction:column;gap:8px;align-items:flex-start">
-          ${d.license_alerts.map(u => UI.tag(`${u.name} 的執業執照 ${u.license_expiry} 到期（剩 ${u.days_left} 天），請確認繼續教育積分`,
+          ${(App.feature('ce') ? d.license_alerts : []).map(u => UI.tag(`${u.name} 的執業執照 ${u.license_expiry} 到期（剩 ${u.days_left} 天），請確認繼續教育積分`,
             u.days_left < 60 ? 'danger' : 'warn')).join('')}
-          ${d.partner_expiring.map(p => UI.tag(`${p.name} 契約 ${p.contract_end} 到期`, 'warn')).join('')}
+          ${(App.modOn('partners') ? d.partner_expiring : []).map(p => UI.tag(`${p.name} 契約 ${p.contract_end} 到期`, 'warn')).join('')}
         </div></div>` : ''}
       ${d.security ? `<div class="card"><h3>上線安全檢查</h3>
         <div style="display:flex;flex-direction:column;gap:8px;align-items:flex-start">
@@ -288,7 +291,7 @@ App.page('my', {
         <div class="stat"><div class="num">${UI.fmtMoney(d.month_revenue)}</div><div class="label">本月開立費用（我的個案）</div></div>
       </div>
 
-      ${d.open_risk_events.length ? `<div class="card"><h3>追蹤中的危機事件</h3>
+      ${(App.modOn('risk') && d.open_risk_events.length) ? `<div class="card"><h3>追蹤中的危機事件</h3>
         ${UI.table(['日期', '個案', '類型', '嚴重度', '通報'], d.open_risk_events.map(e => `<tr>
           <td>${e.date}</td>
           <td><a href="#client/${e.client_id}">${UI.esc(e.client_name)}（${e.client_code}）</a></td>
@@ -352,7 +355,7 @@ App.page('my', {
         <div style="font-size:14px">目前有 <strong>${d.notes_to_review}</strong> 筆等待覆核。
           <a class="btn tiny" href="#notes-review" style="margin-left:8px">前往覆核</a></div></div>` : ''}
 
-      ${d.safety_alerts.length ? `<div class="card"><h3>安全計畫待處理</h3>
+      ${(App.modOn('risk') && d.safety_alerts.length) ? `<div class="card"><h3>安全計畫待處理</h3>
         ${UI.table(['個案', '風險', '狀況', ''], d.safety_alerts.map(a => `<tr>
           <td><a href="#client/${a.client_id}">${UI.esc(a.client_name)}（${a.client_code}）</a></td>
           <td>${stateTag('risk_level', a.risk_level)}</td>
@@ -362,7 +365,7 @@ App.page('my', {
         <div style="font-size:12.5px;color:var(--muted);margin-top:8px">
           安全計畫請於個案頁的「安全計畫」分頁與個案一起訂定，並列印一份給個案帶走。</div></div>` : ''}
 
-      <div class="card"><h3>專業資格進度</h3>
+      ${App.feature('ce') ? `<div class="card"><h3>專業資格進度</h3>
         <div style="font-size:13px;color:var(--muted);margin-bottom:10px">
           ${UI.esc(d.me.license_type || '未填執照類別')}
           ${d.me.license_no ? '　證書字號 ' + UI.esc(d.me.license_no) : ''}
@@ -371,13 +374,13 @@ App.page('my', {
         ${lic !== null ? `<div style="margin-bottom:12px">${UI.tag(
     lic < 0 ? `執照已於 ${d.me.license_expiry} 到期` : `距執照更新尚有 ${lic} 天`,
     lic < 0 ? 'danger' : lic < 180 ? 'warn' : 'ok')}</div>` : ''}
-        ${bar(d.supervision.hours, d.supervision.required, `${d.supervision.year} 年度督導時數（個督 ${d.supervision.individual} 小時）`)}
+        ${App.modOn('supervision') ? bar(d.supervision.hours, d.supervision.required, `${d.supervision.year} 年度督導時數（個督 ${d.supervision.individual} 小時）`) : ''}
         ${bar(d.ce.credits, d.ce.required, `繼續教育總積分（${d.ce.cycle_start} ~ ${d.ce.cycle_end}）`)}
         ${bar(d.ce.special_credits, d.ce.required_special, '專業品質＋倫理＋法規 合計')}
         ${bar(d.ce.ethics_credits, d.ce.required_ethics, '其中專業倫理')}
         <div style="font-size:12.5px;color:var(--muted);margin-top:8px">
           積分明細與請假登錄請至「請假與繼續教育」頁。</div>
-      </div>
+      </div>` : ''}
 
       ${d.upcoming_time_off.length ? `<div class="card"><h3>我的請假</h3>
         ${UI.table(['期間', '時段', '事由'], d.upcoming_time_off.map(o => `<tr>

@@ -118,6 +118,38 @@ router.get('/invoices/:id/receipt', requireStaff('billing'), (req, res) => {
   });
 });
 
+// 期間彙總收據：個案報稅、保險理賠或公司補助核銷時要的是「這段期間總共繳了多少」，
+// 一次列一張，逐筆列出已收款項目。未收款與作廢不列入。
+router.get('/clients/:id/receipt-summary', requireStaff('billing'), (req, res) => {
+  const c = db.prepare('SELECT id, name, code, id_no FROM clients WHERE id = ?').get(req.params.id);
+  if (!c) return res.status(404).json({ error: '找不到此個案' });
+  const from = String(req.query.from || '').slice(0, 10);
+  const to = String(req.query.to || '').slice(0, 10);
+  if (!from || !to) return res.status(400).json({ error: '請指定起訖日期' });
+  const rows = db.prepare(`SELECT id, date, item, amount, method, paid_at, receipt_no, payer,
+      subsidy_amount, self_pay
+    FROM invoices WHERE client_id = ? AND status = 'paid' AND date BETWEEN ? AND ?
+    ORDER BY date, id`).all(c.id, from, to);
+  const refunded = db.prepare(`SELECT COALESCE(SUM(rf.amount),0) n FROM refunds rf
+    JOIN invoices i ON i.id = rf.invoice_id
+    WHERE i.client_id = ? AND i.date BETWEEN ? AND ?`).get(c.id, from, to).n;
+  const total = rows.reduce((s2, r) => s2 + r.amount, 0);
+  audit('staff', req.user.id, req.user.name, '列印期間彙總收據', c.code, { from, to, total });
+  res.json({
+    client: c, from, to, rows,
+    total, refunded, net: total - refunded,
+    sessions: rows.length,
+    issued_by: req.user.name,
+    issued_at: nowStamp(),
+    center_name: getSetting('center_name'),
+    center_phone: getSetting('center_phone'),
+    center_address: getSetting('center_address'),
+    center_license_no: getSetting('center_license_no'),
+    center_director: getSetting('center_director'),
+    center_tax_id: getSetting('center_tax_id')
+  });
+});
+
 // ---- 逾期未收款與催繳 ----
 // 逾期天數以費用日期起算（設定值 overdue_days）。催繳訊息與晤談提醒共用發送機制：
 // 未設定 webhook 時只產生文字供人工發送，不把個資送到外部服務；每則都留發送紀錄。

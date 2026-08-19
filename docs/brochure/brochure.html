@@ -2,12 +2,12 @@
 <html lang="zh-Hant">
 <head>
 <meta charset="utf-8">
-<title>MindCare 心理諮商所管理系統 — 系統介紹</title>
+<title>擁抱心理 諮商所管理系統 — 系統介紹</title>
 <style>
   @page { size: A4; margin: 14mm 13mm 12mm 13mm; }
   * { box-sizing: border-box; margin: 0; padding: 0; }
   :root{
-    --teal:#0e7c7b; --teal-d:#0a5c5b; --teal-l:#eef7f7; --teal-b:#bfdedd;
+    --teal:#4e5556; --teal-d:#363c3d; --teal-l:#fbeeea; --teal-b:#f0cec3;
     --sand:#8a6a20; --sand-l:#fbf5e6; --sand-b:#e6d6ac;
     --ink:#1c2b2b; --muted:#6b7a7a; --line:#dfe7e7;
   }
@@ -74,14 +74,14 @@
 </head>
 <body>
 
-<div class="label">MINDCARE · 系統介紹</div>
-<h1><span class="k">MindCare</span> 心理諮商所管理系統</h1>
+<div class="label">擁抱心理 · 系統介紹</div>
+<h1><span class="k">擁抱心理</span> 諮商所管理系統</h1>
 <p class="lede">為台灣心理諮商所設計的一站式管理系統：來電登記派案、預約排程、SOAP 晤談紀錄、處遇計畫、心理量表、
 危機通報、督導時數、收費與方案、合作單位請款，全部照諮商所的實務流程走。晤談紀錄依主責關係控管存取、簽核後鎖定；
-責任通報自動帶出 24 小時期限並在逾時前警示；個案用手機就能預約、填量表、查費用。</p>
+責任通報自動帶出 24 小時期限並在逾時前警示；個案用手機就能預約、填量表、查費用。<strong>LINE 官方帳號可直接收改期與請假</strong>，轉給心理師群組、行政簽核後才真正改期。</p>
 
 <div class="stats">
-  <div class="stat"><b>19</b><span>功能模組（可逐一授權）</span></div>
+  <div class="stat"><b>20</b><span>功能模組（可逐一授權、可整組關閉）</span></div>
   <div class="stat"><b>5</b><span>報表，皆可出 Excel／PDF／CSV</span></div>
   <div class="stat"><b>5</b><span>心理量表，自動計分與判讀</span></div>
   <div class="stat"><b>24hr</b><span>責任通報期限自動追蹤</span></div>
@@ -94,7 +94,7 @@
       <img src="{{QR_STAFF}}" alt="所內管理端 QR">
       <div>
         <div class="t">所內管理端</div>
-        <a href="https://mindcare.crownai.ink/">https://mindcare.crownai.ink/</a>
+        <a href="https://mental-hug.crownai.ink/">https://mental-hug.crownai.ink/</a>
         <div class="acct">所長 admin / mindcare123<br>心理師 lin / 123456</div>
       </div>
     </div>
@@ -102,7 +102,7 @@
       <img src="{{QR_CLIENT}}" alt="個案專區 QR">
       <div>
         <div class="t">個案專區（手機開啟）</div>
-        <a href="https://mindcare.crownai.ink/portal.html">https://mindcare.crownai.ink/portal.html</a>
+        <a href="https://mental-hug.crownai.ink/portal.html">https://mental-hug.crownai.ink/portal.html</a>
         <div class="acct">個案 0912345678 / 345678</div>
       </div>
     </div>
@@ -123,6 +123,7 @@
   <div class="card"><h4>線上視訊晤談<span class="tag">遠距</span></h4><p>預約形式選「視訊」即自動帶入該心理師的<strong>固定會議室連結</strong>（於帳號設定一次），也可逐筆指定。連結只接受 http(s) 完整網址，<strong>自動附加在晤談提醒訊息裡</strong>；個案在專區首頁直接看到「進入視訊晤談」按鈕，心理師則在今日看板與本週排程一鍵進入。到所與視訊的服務量比例列入月報，方案與評鑑報表需要時可直接引用。</p></div>
   <div class="card"><h4>我的工作台<span class="tag">心理師視角</span></h4><p>總覽是所方視角，這頁是心理師自己的：我的在案個案與其中高風險數、<strong>本週排程（含視訊連結）</strong>、本月與今年完成晤談、待補紀錄與待完成衡鑑報告、我的個案未讀訊息與待填量表、追蹤中危機事件與通報期限、本月開立費用。下半頁是專業資格進度條——<strong>年度督導時數、繼續教育總積分、特定三類合計與專業倫理個別下限</strong>，各自顯示已達標或尚差多少，以及執照更新倒數。</p></div>
   <div class="card"><h4>晤談提醒</h4><p>產生可直接複製的提醒訊息（範本可自訂，代入個案、心理師、日期星期、時間、取消時限）。填入<strong>webhook 網址</strong>後可由系統直接送出簡訊或 LINE，支援單筆與整批發送；<strong>每一則發送都留紀錄</strong>，成功、失敗與失敗原因可查。未設定通道時只產生文字供人工發送，不會把個資送出去。</p></div>
+  <div class="card"><h4>LINE 傳話與改期簽核<span class="tag">官方帳號</span></h4><p>個案在<strong>LINE 官方帳號</strong>傳「要改期／請假」，系統依關鍵字自動抓出他最近一筆有效預約，把原話<strong>轉到該心理師的 LINE 群組</strong>並回覆個案已收到；心理師直接在群組回覆，內容自動記入申請單。行政人員在「改期簽核」頁填入新時段按下簽核，系統<strong>檢查心理師與諮商室衝突後才真正改期</strong>，並同時把新時間送回個案的對話框與心理師群組。心理師未及回覆時，行政可用電話問完<strong>代錄回覆</strong>；憑證尚未申請前流程照常在系統內跑，只是不對外送訊息。每一則收送都留軌跡含失敗原因。</p></div>
 </div>
 
 <div class="grp">臨床作業</div>
@@ -161,6 +162,7 @@
   <div class="card g"><h4>量表自填</h4><p>心理師指派的量表出現在待填清單並附期限，逐題作答送出後結果直接進入個案的分數趨勢。<strong>命中危險題會同步觸發所內警示</strong>，並在頁面顯示求助資源。多次施測後可看到自己的<strong>分數變化折線圖</strong>，附「第一次幾分、最近一次幾分」的白話說明。</p></div>
   <div class="card g"><h4>費用查詢</h4><p>歷次收費、已收與未收金額、方案剩餘堂數一頁看完。</p></div>
   <div class="card g"><h4>同意書線上簽署</h4><p>閱讀全文後線上簽署，系統保存<strong>簽署當下的全文快照、簽署人身分（本人或法定代理人）與簽署時間</strong>。未簽的必簽同意書會主動提示。</p></div>
+  <div class="card"><h4>收據與諮商紀錄列印</h4><p>收款後可列印<strong>單筆收據</strong>，帶機構抬頭、統一編號、開業執照字號與負責心理師；個案報稅、保險理賠或公司補助核銷時另可開立<strong>期間彙總收據</strong>，逐筆列出該期間已收款項目並附合計與退費淨額。晤談紀錄可輸出<strong>SOAP 諮商紀錄列印版</strong>（含心理師證照字號與簽章欄），供轉介或法定用途；權限與線上調閱相同，<strong>每次列印一樣寫入稽核軌跡</strong>。</p></div>
   <div class="card g"><h4>訊息與公告</h4><p>與所方的行政訊息往來（<strong>不作為晤談內容討論管道</strong>，頁面明確標示）；公告與危機求助資訊常駐顯示。</p></div>
   <div class="card g"><h4>諮商所提供的檔案</h4><p>所方勾選開放的附件（如衡鑑報告、轉介文件）可自行下載，不必再跑一趟。未開放者個案看不到也下載不到。</p></div>
 </div>
@@ -203,7 +205,7 @@
 <div class="sec"><h2>安全與資料保全</h2><div class="note">存的是心理紀錄與個案個資，預設就要守得住</div></div>
 <div class="rule"></div>
 <div class="cards" style="margin-top:7px">
-  <div class="card"><h4>存取控制與登入防護</h4><p>員工與個案登入分離，19 個模組逐一授權。<strong>晤談紀錄與團體歷程紀錄採主責關係控管</strong>——行政人員即使有個案管理權限也讀不到內容；危機事件模組預設不開放行政人員。個案僅能存取自己的預約、量表、費用與被開放的附件。同帳號連續失敗 5 次鎖定 15 分鐘並針對 IP 限流；個案預設密碼為手機末 6 碼且首次登入強制更換。系統至少保留一位啟用中的管理者，不可自我降權鎖死。</p></div>
+  <div class="card"><h4>存取控制與登入防護</h4><p>員工與個案登入分離，20 個模組逐一授權，用不到的模組可在系統設定整組關閉。<strong>晤談紀錄與團體歷程紀錄採主責關係控管</strong>——行政人員即使有個案管理權限也讀不到內容；危機事件模組預設不開放行政人員。個案僅能存取自己的預約、量表、費用與被開放的附件。同帳號連續失敗 5 次鎖定 15 分鐘並針對 IP 限流；個案預設密碼為手機末 6 碼且首次登入強制更換。系統至少保留一位啟用中的管理者，不可自我降權鎖死。</p></div>
   <div class="card"><h4>資料保全與稽核</h4><p>全站 HTTPS 並啟用 HSTS 等安全標頭；<strong>資料庫每日自動備份保留 14 份並另存異地鏡像，附件一併同步</strong>。附件以隨機檔名落地、目錄不對外開放，下載須逐次驗權。關鍵操作全程留痕（含附件上傳下載、報表匯出、危機事件異動），保留期限可設定。<strong>心理紀錄不硬刪</strong>——簽核後鎖定、個案改為停用、收費單作廢採沖銷；停用個案會一併取消未來預約並標記退出團體，不會留下幽靈排程。選項清單與前台文字皆可於系統設定自行維護，不必改程式。</p></div>
 </div>
 
@@ -221,9 +223,9 @@
 <div class="foot">
   <b>技術架構</b>：Node.js + Express + SQLite（免另建資料庫）；原生 JS 前端無框架無編譯，個案端為 PWA。
   <b>通知</b>：可接自家簡訊／LINE webhook，未設定則產生訊息供人工發送。<b>部署</b>：nginx 反向代理。<br>
-  <b>線上試用</b>：所內端 <a href="https://mindcare.crownai.ink/">mindcare.crownai.ink</a>　·
-  個案端 <a href="https://mindcare.crownai.ink/portal.html">mindcare.crownai.ink/portal.html</a>　·
-  本文件 <a href="https://mindcare.crownai.ink/mindcare-intro.pdf">mindcare.crownai.ink/mindcare-intro.pdf</a>
+  <b>線上試用</b>：所內端 <a href="https://mental-hug.crownai.ink/">mental-hug.crownai.ink</a>　·
+  個案端 <a href="https://mental-hug.crownai.ink/portal.html">mental-hug.crownai.ink/portal.html</a>　·
+  本文件 <a href="https://mental-hug.crownai.ink/mental-hug-intro.pdf">mental-hug.crownai.ink/mental-hug-intro.pdf</a>
 </div>
 
 </body>

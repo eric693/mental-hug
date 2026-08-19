@@ -145,7 +145,7 @@ function startServer() {
     const timer = setTimeout(() => reject(new Error('伺服器啟動逾時：\n' + out)), 20000);
     server.stdout.on('data', d => {
       out += d;
-      if (out.includes('MindCare')) { clearTimeout(timer); resolve(); }
+      if (out.includes('個案專區')) { clearTimeout(timer); resolve(); }
     });
     server.stderr.on('data', d => { out += d; });
     server.on('exit', code => { clearTimeout(timer); reject(new Error(`伺服器結束（code ${code}）：\n${out}`)); });
@@ -376,6 +376,12 @@ function startServer() {
     await lin.ok('POST', `/api/notes/${noteId}/sign`, {});
     await lin.fails('PUT', `/api/notes/${noteId}`, { plan: '改改看' }, '定稿');
   });
+  await test('諮商紀錄列印版帶機構抬頭，非主責讀不到', async () => {
+    const p = await lin.ok('GET', `/api/notes/${noteId}/print`);
+    assert(p.center_name && p.printed_by, '應帶機構抬頭與列印人');
+    equal(p.subjective, 'S', '紀錄內容');
+    await chen.fails('GET', `/api/notes/${noteId}/print`, undefined, '主責');
+  });
   await test('實習生紀錄須經督導覆核才定稿', async () => {
     const u = await admin.ok('POST', '/api/users', {
       username: 'smoke_intern', password: '123456', name: '冒煙實習生', role: 'counselor',
@@ -526,6 +532,132 @@ function startServer() {
     await admin.ok('DELETE', `/api/refunds/${rf.id}`);
     const list = await admin.ok('GET', `/api/invoices?client_id=${clientId}`);
     equal(list.rows.find(r => r.id === invoiceId).status, 'paid', '撤銷後狀態');
+  });
+
+  await test('期間彙總收據列出已收款項目', async () => {
+    const r = await admin.ok('GET', `/api/clients/${clientId}/receipt-summary?from=2000-01-01&to=2100-01-01`);
+    assert(r.rows.length >= 1, '應列出已收款項目');
+    equal(r.total, r.rows.reduce((n, x) => n + x.amount, 0), '合計金額');
+    assert(r.center_name, '應帶機構抬頭');
+    await admin.fails('GET', `/api/clients/${clientId}/receipt-summary`, undefined, '起訖');
+  });
+
+  // ---------------------------------------------------------------- LINE 傳話與改期簽核
+  section('LINE 傳話與改期簽核');
+  let reqId, reschedApptId;
+  await test('櫃檯代錄改期申請並轉達（未設憑證時只留紀錄）', async () => {
+    const target = addDays(monday, 35);
+    const a = await admin.ok('POST', '/api/appointments',
+      { client_id: clientId, counselor_id: 2, date: target, start_time: '10:00' });
+    reschedApptId = a.id;
+    const r = await admin.ok('POST', '/api/reschedule-requests',
+      { appointment_id: a.id, raw_text: '那天要開刀，可以改到隔天嗎' });
+    reqId = r.id;
+    equal(r.relay.status, 'skipped', '未設 LINE 憑證時應為未送出');
+    const list = await admin.ok('GET', '/api/reschedule-requests?status=open');
+    equal(list.find(x => x.id === reqId).status, 'relayed', '轉達後狀態');
+  });
+  await test('代錄心理師回覆後進入待簽核', async () => {
+    await admin.fails('POST', `/api/reschedule-requests/${reqId}/reply`, { counselor_reply: '' }, '回覆');
+    await admin.ok('POST', `/api/reschedule-requests/${reqId}/reply`, { counselor_reply: '可以，改隔天同一時間' });
+    const list = await admin.ok('GET', '/api/reschedule-requests?status=replied');
+    equal(list.find(x => x.id === reqId).status, 'replied', '回覆後狀態');
+  });
+  await test('簽核時段衝突會被擋下', async () => {
+    const clash = addDays(monday, 42);
+    await admin.ok('POST', '/api/appointments',
+      { client_id: clientId, counselor_id: 2, date: clash, start_time: '11:00' });
+    await admin.fails('POST', `/api/reschedule-requests/${reqId}/approve`,
+      { new_date: clash, new_start_time: '11:00' }, '衝突');
+  });
+  await test('簽核後預約真的改期', async () => {
+    const target = addDays(monday, 36);
+    await admin.ok('POST', `/api/reschedule-requests/${reqId}/approve`,
+      { new_date: target, new_start_time: '10:00' });
+    const a = (await admin.ok('GET', `/api/appointments?client_id=${clientId}`)).find(x => x.id === reschedApptId);
+    equal(a.date, target, '改期後日期');
+    equal(a.reschedule_count, 1, '改期次數');
+    const done = await admin.ok('GET', '/api/reschedule-requests?status=approved');
+    equal(done.find(x => x.id === reqId).status, 'approved', '簽核後狀態');
+    await admin.fails('POST', `/api/reschedule-requests/${reqId}/approve`,
+      { new_date: target, new_start_time: '15:00' }, '已簽核');
+  });
+  await test('未設定憑證時 webhook 一律拒收', async () => {
+    const r = await fetch(BASE + '/line/webhook', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ events: [] })
+    });
+    equal(r.status, 403, 'HTTP 狀態');
+  });
+  await test('傳話軌跡與綁定狀態可查', async () => {
+    const ev = await admin.ok('GET', '/api/line/events');
+    assert(ev.length >= 1, '應有傳話紀錄');
+    const st = await admin.ok('GET', '/api/line/status');
+    equal(st.enabled, false, '未設憑證應為未啟用');
+    await admin.ok('PUT', '/api/line/counselors/2/group', { line_group_id: 'Cgroup-test' });
+    const st2 = await admin.ok('GET', '/api/line/status');
+    equal(st2.counselors.find(c => c.id === 2).line_group_id, 'Cgroup-test', '群組設定');
+  });
+  await test('webhook 收個案訊息：綁定→提出改期→轉群組→群組回覆', async () => {
+    const crypto = require('crypto');
+    const secret = 'smoke-secret';
+    await admin.ok('PUT', '/api/settings', { line_channel_secret: secret, line_channel_token: 'smoke-token' });
+    const hook = async payload => {
+      const raw = JSON.stringify(payload);
+      const sig = crypto.createHmac('sha256', secret).update(raw).digest('base64');
+      const r = await fetch(BASE + '/line/webhook', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'X-Line-Signature': sig },
+        body: raw
+      });
+      equal(r.status, 200, 'webhook HTTP 狀態');
+      await new Promise(res => setTimeout(res, 300));   // 事件是回 200 之後才處理
+    };
+    const userMsg = text => ({
+      events: [{ type: 'message', replyToken: 'tok', source: { type: 'user', userId: 'Usmoke1' }, message: { type: 'text', text } }]
+    });
+    // 簽章錯誤要擋下
+    const bad = await fetch(BASE + '/line/webhook', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'X-Line-Signature': 'wrong' },
+      body: JSON.stringify(userMsg('哈囉'))
+    });
+    equal(bad.status, 401, '簽章錯誤應 401');
+
+    await hook(userMsg('綁定 0900000001'));
+    const c = await admin.ok('GET', `/api/clients/${clientId}`);
+    equal(c.line_user_id, 'Usmoke1', '綁定後的 LINE userId');
+
+    // 個案沒指定是哪一次，系統一律抓他「最近一筆未來的有效預約」
+    const nextAppt = (await admin.ok('GET', `/api/appointments?client_id=${clientId}&status=booked`))
+      .filter(x => x.date >= ymd(new Date())).sort((x, y) => (x.date + x.start_time).localeCompare(y.date + y.start_time))[0];
+    assert(nextAppt, '測試前提：個案應有未來預約');
+    await hook(userMsg('下週那次可以改期嗎，我要出差'));
+    const open = await admin.ok('GET', '/api/reschedule-requests?status=open');
+    const r = open.find(x => x.source === 'line' && x.appointment_id === nextAppt.id);
+    assert(r, '應依關鍵字建立改期申請，並對應到最近一筆未來預約');
+    equal(r.status, 'relayed', '已轉達心理師群組');
+
+    await hook({ events: [{ type: 'message', replyToken: 'tok2',
+      source: { type: 'group', groupId: 'Cgroup-test' }, message: { type: 'text', text: '可以，改成隔天同時段' } }] });
+    const after = (await admin.ok('GET', '/api/reschedule-requests?status=replied')).find(x => x.id === r.id);
+    assert(after && after.counselor_reply.includes('隔天'), '群組回覆應記入申請');
+
+    // 非關鍵字訊息只進個案訊息，不打擾心理師群組
+    const before = (await admin.ok('GET', '/api/reschedule-requests?status=all')).length;
+    await hook(userMsg('謝謝老師'));
+    const now = (await admin.ok('GET', '/api/reschedule-requests?status=all')).length;
+    equal(now, before, '一般訊息不應產生改期申請');
+    const msgs = await admin.ok('GET', `/api/messages?client_id=${clientId}`);
+    assert(msgs.some(m => m.content === '謝謝老師'), '一般訊息應進個案訊息');
+
+    await admin.ok('PUT', '/api/settings', { line_channel_secret: '', line_channel_token: '' });
+  });
+
+  await test('模組關閉後 API 一律 403', async () => {
+    await admin.ok('PUT', '/api/settings', { disabled_modules: 'line' });
+    await admin.fails('GET', '/api/reschedule-requests', undefined, '未啟用');
+    await admin.ok('PUT', '/api/settings', { disabled_modules: '' });
+    await admin.ok('GET', '/api/reschedule-requests');
   });
 
   // ---------------------------------------------------------------- 附件

@@ -905,6 +905,9 @@ App.page('users', {
 });
 
 // ---- 系統設定 ----
+// 核心模組不開放關閉：關掉系統就無法運作
+const CORE_MODULES = ['schedule', 'clients', 'notes', 'settings', 'users'];
+
 App.page('settings', {
   title: '系統設定',
   sub: '所別資訊、收費預設值、選項清單與同意書範本',
@@ -929,6 +932,14 @@ App.page('settings', {
         ['report_deadline_hours', '通報時限（小時）']]],
       ['報酬與扣繳', [['withholding_rate', '執行業務所得扣繳率（0-1）'], ['withholding_min', '所得稅起扣金額'],
         ['nhi_supplement_rate', '二代健保補充保費費率（0-1）'], ['nhi_supplement_min', '補充保費起扣金額']]],
+      ['LINE 傳話機器人', [['line_channel_secret', 'Channel secret'], ['line_channel_token', 'Channel access token'],
+        ['line_default_group_id', '預設心理師群組 groupId'], ['line_keywords', '視為請假／改期的關鍵字（逗號分隔）'],
+        ['line_relay_template', '轉給心理師群組的範本（{req}{client}{code}{date}{weekday}{time}{text}）'],
+        ['line_bind_hint', '未綁定個案的引導語（{center}{phone}）'],
+        ['line_ack_client', '收到個案訊息的自動回覆（{phone}）'],
+        ['line_done_client', '簽核後回覆個案（{client}{new_date}{new_weekday}{new_time}{counselor}{phone}{center}）'],
+        ['line_done_group', '簽核後回覆群組（{req}{client}{code}{date}{time}{new_date}{new_weekday}{new_time}）'],
+        ['line_reject_client', '退回時回覆個案（{client}{phone}{center}）']]],
       ['提醒發送通道', [['notify_webhook_url', 'Webhook 網址（留空則僅人工發送）'],
         ['notify_webhook_token', 'Webhook 驗證權杖']]],
       ['提醒訊息', [['reminder_template', '晤談提醒範本（{client}{counselor}{date}{weekday}{time}{center}{cancel_hours}{phone}{meeting}）'],
@@ -954,9 +965,20 @@ App.page('settings', {
         ['ui_portal_login_hint', '個案端 登入說明'], ['ui_demo_portal', '個案端 提示框'],
         ['ui_portal_note', '個案端 說明區塊'], ['ui_crisis_note', '危機求助提示']]]
     ];
-    el.innerHTML = groups.map(([label, fields]) => `<div class="card"><h3>${label}</h3>
+    // 模組啟用：所方用不到的功能整組關掉（側欄不出現、API 一律 403）。
+    // 權限勾選不動，重新啟用即回到原本設定。
+    const off = String(s.disabled_modules || '').split(',').map(x => x.trim()).filter(Boolean);
+    const moduleCard = `<div class="card"><h3>模組啟用</h3>
+      <div style="font-size:12.5px;color:var(--muted);margin-bottom:10px">
+        取消勾選即關閉該模組：側欄不再出現、相關 API 一律拒絕，帳號的權限勾選保留不動，重新勾回即回復。
+        「預約排程」「個案管理」「晤談紀錄」「系統設定」為系統核心，不提供關閉。</div>
+      <div class="form-grid">${(App.meta.modules || []).filter(m => !CORE_MODULES.includes(m.key))
+    .map(m => UI.checkbox('mod_' + m.key, m.label, !off.includes(m.key))).join('')}
+        ${UI.checkbox('feature_ce', '繼續教育積分（關閉後「請假與繼續教育」頁只留請假）', s.feature_ce === '1')}
+      </div></div>`;
+    el.innerHTML = moduleCard + groups.map(([label, fields]) => `<div class="card"><h3>${label}</h3>
       <div class="form-grid">${fields.map(([k, l]) =>
-        (String(s[k] || '').length > 40 || k === 'reminder_template' || k === 'shift_quick_fills' || k === 'safety_plan_resources' || k.startsWith('ui_demo') || k === 'ui_portal_note' || k === 'ui_crisis_note' || k.endsWith('_options') || k.endsWith('_types') || k.endsWith('_methods') || k.endsWith('_reasons') || k.endsWith('_channels'))
+        (String(s[k] || '').length > 40 || k === 'reminder_template' || k.startsWith('line_') && k.endsWith('_template') || k.startsWith('line_done') || k === 'line_bind_hint' || k === 'line_ack_client' || k === 'line_reject_client' || k === 'shift_quick_fills' || k === 'safety_plan_resources' || k.startsWith('ui_demo') || k === 'ui_portal_note' || k === 'ui_crisis_note' || k.endsWith('_options') || k.endsWith('_types') || k.endsWith('_methods') || k.endsWith('_reasons') || k.endsWith('_channels'))
           ? UI.textarea(k, l, { value: s[k] || '' })
           : UI.input(k, l, { value: s[k] || '' })).join('')}</div></div>`).join('') +
       `<div class="card"><h3>諮商室</h3><div id="rooms"></div></div>
@@ -982,7 +1004,12 @@ App.page('settings', {
     };
     el.querySelector('#save').onclick = async () => {
       const data = {};
-      el.querySelectorAll('.card input[name], .card textarea[name]').forEach(i => { data[i.name] = i.value; });
+      el.querySelectorAll('.card input[name]:not([type=checkbox]), .card textarea[name]').forEach(i => { data[i.name] = i.value; });
+      // 模組勾選另外組成 disabled_modules（未勾選者為關閉）
+      const offList = [];
+      el.querySelectorAll('.card input[type=checkbox][name^="mod_"]').forEach(i => { if (!i.checked) offList.push(i.name.slice(4)); });
+      data.disabled_modules = offList.join(',');
+      data.feature_ce = el.querySelector('input[name=feature_ce]').checked ? '1' : '0';
       await PUT('/settings', data);
       UI.toast('已儲存，重新整理後生效');
     };

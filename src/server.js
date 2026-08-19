@@ -6,7 +6,7 @@ const { db, audit, getSetting, UI_TEXT_KEYS, DATA_DIR, UPLOAD_DIR } = require('.
 const { buildCalendar } = require('./ics');
 const {
   STAFF_COOKIE, signToken, setAuthCookie, clearAuthCookie,
-  requireStaff, requireAdmin, parsePermissions, MODULE_KEYS,
+  requireStaff, requireAdmin, disabledModules, featureOn,
   loginLockedMinutes, loginFailed, loginSucceeded, rateLimit
 } = require('./auth');
 
@@ -14,12 +14,16 @@ const loginRateLimit = rateLimit({ windowMs: 5 * 60 * 1000, max: 30, prefix: 'lo
 
 const app = express();
 app.disable('x-powered-by');
-app.use(express.json({ limit: '2mb' }));
+// LINE webhook 需要未經解析的原始 body 來驗簽章，故在此保留一份
+app.use(express.json({
+  limit: '2mb',
+  verify: (req, res, buf) => { if (req.originalUrl === '/line/webhook') req.rawBody = buf; }
+}));
 
 // ---- 公開端點：登入頁文字 ----
 app.get('/api/public/ui-texts', (req, res) => {
   const out = {
-    center_name: getSetting('center_name', 'MindCare 心理諮商所'),
+    center_name: getSetting('center_name', '擁抱心理諮商所'),
     center_phone: getSetting('center_phone'),
     center_address: getSetting('center_address')
   };
@@ -57,8 +61,11 @@ app.get('/api/me', requireStaff(), (req, res) => {
     is_intern: !!req.user.is_intern,
     is_supervisor: req.user.role === 'admin' || req.user.role === 'supervisor'
       || !!db.prepare('SELECT 1 FROM users WHERE supervisor_id = ? AND active = 1').get(req.user.id),
-    modules: req.user.role === 'admin' ? MODULE_KEYS : parsePermissions(req.user.permissions),
-    center_name: getSetting('center_name', 'MindCare 心理諮商所')
+    modules: req.userModules,
+    // 未啟用模組與細項開關：前端據此隱藏側欄項目與看板區塊
+    disabled_modules: disabledModules(),
+    features: { ce: featureOn('ce') },
+    center_name: getSetting('center_name', '擁抱心理諮商所')
   });
 });
 
@@ -91,6 +98,8 @@ app.use('/api', require('./routes/billing'));
 app.use('/api', require('./routes/org'));
 app.use('/api', require('./routes/attachments'));
 app.use('/api', require('./routes/imports'));
+// LINE 傳話機器人：/line/webhook（免登入、驗簽章）與 /api/reschedule-requests 等系統端 API
+app.use(require('./routes/line'));
 
 // 手動觸發備份與附件同步：換機、要立刻帶走資料，或剛上傳完重要附件時不必等排程。
 // 僅管理者可用，並回報備份檔與同步的附件數，方便確認真的做了。
@@ -239,6 +248,6 @@ setInterval(dailyMaintenance, 6 * 3600 * 1000);
 
 const PORT = process.env.PORT || 3270;
 app.listen(PORT, () => {
-  console.log(`MindCare 心理諮商所管理系統 http://localhost:${PORT}`);
+  console.log(`擁抱心理諮商所管理系統 http://localhost:${PORT}`);
   console.log(`個案專區 http://localhost:${PORT}/portal.html`);
 });

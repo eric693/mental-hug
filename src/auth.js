@@ -1,5 +1,5 @@
 const jwt = require('jsonwebtoken');
-const { db, SECRET } = require('./db');
+const { db, SECRET, getSetting } = require('./db');
 
 const STAFF_COOKIE = 'mc_staff';
 const CLIENT_COOKIE = 'mc_client';
@@ -22,6 +22,7 @@ const MODULES = [
   { key: 'hr', label: '請假與繼續教育' },
   { key: 'payouts', label: '報酬與扣繳' },
   { key: 'messages', label: '個案訊息' },
+  { key: 'line', label: 'LINE 傳話與改期簽核' },
   { key: 'announcements', label: '公告' },
   { key: 'reports', label: '統計報表' },
   { key: 'users', label: '帳號權限' },
@@ -29,11 +30,25 @@ const MODULES = [
 ];
 const MODULE_KEYS = MODULES.map(m => m.key);
 
+// 未啟用模組：所方用不到的功能（如合作單位請款、危機通報、督導紀錄）於系統設定關閉。
+// 關閉後側欄不出現、API 一律 403，權限勾選仍保留，重新啟用即回復原本設定。
+// 這裡不快取，設定改完立即生效。
+function disabledModules() {
+  return String(getSetting('disabled_modules', '')).split(',').map(s => s.trim()).filter(Boolean);
+}
+function moduleEnabled(key) { return !disabledModules().includes(key); }
+function enabledModuleKeys() {
+  const off = disabledModules();
+  return MODULE_KEYS.filter(k => !off.includes(k));
+}
+// 模組以外的細項開關（如繼續教育積分區塊，附在「請假與繼續教育」頁內）
+function featureOn(key) { return getSetting('feature_' + key, '1') === '1'; }
+
 // 行政人員預設不含晤談紀錄與危機事件（保密考量），建立帳號時可再調整
 const ROLE_DEFAULT_MODULES = {
-  counselor: ['schedule', 'intake', 'clients', 'groups', 'notes', 'plans', 'assessments', 'risk', 'supervision', 'consents', 'hr', 'messages', 'announcements', 'reports'],
-  supervisor: ['schedule', 'intake', 'clients', 'groups', 'notes', 'plans', 'assessments', 'risk', 'supervision', 'consents', 'hr', 'messages', 'announcements', 'reports'],
-  staff: ['schedule', 'intake', 'clients', 'groups', 'assessments', 'consents', 'billing', 'partners', 'messages', 'announcements']
+  counselor: ['schedule', 'intake', 'clients', 'groups', 'notes', 'plans', 'assessments', 'risk', 'supervision', 'consents', 'hr', 'messages', 'announcements', 'reports', 'line'],
+  supervisor: ['schedule', 'intake', 'clients', 'groups', 'notes', 'plans', 'assessments', 'risk', 'supervision', 'consents', 'hr', 'messages', 'announcements', 'reports', 'line'],
+  staff: ['schedule', 'intake', 'clients', 'groups', 'assessments', 'consents', 'billing', 'partners', 'messages', 'announcements', 'line']
 };
 
 // 登入暴力嘗試防護：同一帳號連續失敗 5 次鎖定 15 分鐘
@@ -112,7 +127,12 @@ function requireStaff(moduleKey) {
     const user = db.prepare('SELECT * FROM users WHERE id = ? AND active = 1').get(payload.id);
     if (!user) return res.status(401).json({ error: '帳號不存在或已停用' });
     req.user = user;
-    req.userModules = user.role === 'admin' ? MODULE_KEYS : parsePermissions(user.permissions);
+    const off = disabledModules();
+    req.userModules = (user.role === 'admin' ? MODULE_KEYS : parsePermissions(user.permissions))
+      .filter(k => !off.includes(k));
+    if (moduleKey && off.includes(moduleKey)) {
+      return res.status(403).json({ error: '此模組未啟用' });
+    }
     if (moduleKey && user.role !== 'admin' && !req.userModules.includes(moduleKey)) {
       return res.status(403).json({ error: '無此模組使用權限' });
     }
@@ -189,7 +209,7 @@ function requireAnyUser(req, res, next) {
 }
 
 module.exports = {
-  MODULES, MODULE_KEYS, ROLE_DEFAULT_MODULES, STAFF_COOKIE, CLIENT_COOKIE,
+  MODULES, MODULE_KEYS, ROLE_DEFAULT_MODULES, disabledModules, moduleEnabled, enabledModuleKeys, featureOn, STAFF_COOKIE, CLIENT_COOKIE,
   signToken, setAuthCookie, clearAuthCookie, parsePermissions,
   requireStaff, requireAdmin, requireClient, requireAnyUser, requireNoteAccess,
   canViewNote, canViewClientNotes, isSupervisorOf,

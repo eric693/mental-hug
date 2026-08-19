@@ -1,8 +1,9 @@
 :root {
-  --primary: #0e7c7b;
-  --primary-dark: #0a5c5b;
-  --primary-light: #e6f4f4;
-  --accent: #e8871e;
+  /* 擁抱心理品牌色：主色取自標誌的暖灰（#4E5556），輔色為淡珊瑚（#F4CCC3） */
+  --primary: #4e5556;
+  --primary-dark: #363c3d;
+  --primary-light: #fbeeea;
+  --accent: #d98b78;
   --bg: #f4f6f8;
   --card: #ffffff;
   --text: #1f2d3d;
@@ -30,14 +31,14 @@ a { color: var(--primary); text-decoration: none; }
 /* ---- 版面 ---- */
 .layout { display: flex; min-height: 100vh; }
 .sidebar {
-  width: 220px; background: #123a3a; color: #cfe3e3; flex-shrink: 0;
+  width: 220px; background: #3b4142; color: #e2d9d5; flex-shrink: 0;
   display: flex; flex-direction: column; position: sticky; top: 0; height: 100vh; overflow-y: auto;
 }
 .sidebar .brand {
   padding: 18px 16px 14px; color: #fff; font-size: 17px; font-weight: 700;
   border-bottom: 1px solid rgba(255,255,255,0.12);
 }
-.sidebar .brand small { display: block; font-size: 11px; font-weight: 400; color: #9dc3c2; margin-top: 2px; }
+.sidebar .brand small { display: block; font-size: 11px; font-weight: 400; color: #d6b6ab; margin-top: 2px; }
 .nav { flex: 1; padding: 8px 0; }
 .nav a {
   display: block; padding: 10px 18px; color: #cfe3e3; font-size: 14px;
@@ -65,7 +66,7 @@ a { color: var(--primary); text-decoration: none; }
   .sidebar { position: fixed; left: -240px; z-index: 60; transition: left 0.2s; height: 100vh; }
   .sidebar.open { left: 0; box-shadow: 4px 0 20px rgba(0,0,0,0.3); }
   .topbar {
-    display: flex; align-items: center; gap: 12px; background: #123a3a; color: #fff;
+    display: flex; align-items: center; gap: 12px; background: #3b4142; color: #fff;
     padding: 12px 16px; position: sticky; top: 0; z-index: 50;
   }
   .topbar .menu-btn { background: none; border: 1px solid rgba(255,255,255,0.4); color: #fff; border-radius: 6px; padding: 4px 10px; cursor: pointer; }
@@ -157,7 +158,7 @@ table.list tr:hover td { background: #f8fbfb; }
 #toast.error { background: var(--danger); }
 
 /* ---- 登入頁 ---- */
-.login-wrap { min-height: 100vh; display: flex; align-items: center; justify-content: center; background: linear-gradient(150deg, #0e7c7b, #123a3a); padding: 16px; }
+.login-wrap { min-height: 100vh; display: flex; align-items: center; justify-content: center; background: linear-gradient(150deg, #f4ccc3, #4e5556); padding: 16px; }
 .login-card { background: #fff; border-radius: 14px; padding: 34px 30px; width: 380px; max-width: 100%; box-shadow: 0 16px 50px rgba(0,0,0,0.3); }
 .login-card h1 { font-size: 22px; margin-bottom: 2px; color: var(--primary-dark); }
 .login-card .sub { color: var(--muted); font-size: 13px; margin-bottom: 22px; }
@@ -232,7 +233,30 @@ table.list tr:hover td { background: #f8fbfb; }
 @media print {
   .sidebar, .topbar, .toolbar, .btn { display: none !important; }
   .main { padding: 0; }
+  /* 列印文件（收據、諮商紀錄、安全計畫）都放在 Modal 裡：有 Modal 時只印 Modal 內容 */
+  body:has(.modal-mask) #app { display: none !important; }
+  .modal-mask { position: static; background: none; display: block; padding: 0; }
+  .modal { box-shadow: none; border: 0; max-height: none; width: auto; max-width: none; border-radius: 0; }
+  .modal-head, .modal-foot { display: none !important; }
+  .modal-body { overflow: visible; padding: 0; }
+  .print-doc { font-size: 13px; color: #000; }
+  .print-doc .no-print { display: none !important; }
 }
+
+/* 列印文件的共用版面（螢幕上也照這個樣子預覽） */
+.print-doc { font-size: 14px; line-height: 1.9; color: var(--text); }
+.print-doc .doc-title { text-align: center; font-size: 19px; font-weight: 700; letter-spacing: 2px; }
+.print-doc .doc-org { text-align: center; font-size: 13px; color: var(--muted); margin-bottom: 14px; }
+.print-doc .doc-field { display: flex; gap: 8px; border-bottom: 1px dotted var(--border); padding: 3px 0; }
+.print-doc .doc-field > span:first-child { flex: 0 0 96px; color: var(--muted); }
+.print-doc .doc-section { margin-top: 12px; }
+.print-doc .doc-section h4 { font-size: 14px; margin-bottom: 2px; }
+.print-doc .doc-section .body { white-space: pre-wrap; border: 1px solid var(--border); border-radius: 6px;
+  padding: 8px 10px; min-height: 34px; }
+.print-doc .doc-foot { margin-top: 18px; font-size: 12.5px; color: var(--muted); }
+.print-doc table.doc { width: 100%; border-collapse: collapse; margin-top: 8px; font-size: 13.5px; }
+.print-doc table.doc th, .print-doc table.doc td { border: 1px solid var(--border); padding: 6px 8px; text-align: left; }
+.print-doc table.doc th { background: var(--primary-light); }
 
 /* ---- 親師訊息（家長端頁面與員工端對話視窗共用） ---- */
 .chat-list { display: flex; flex-direction: column; gap: 10px; min-height: 120px; }
