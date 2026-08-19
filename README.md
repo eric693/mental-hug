@@ -6,7 +6,8 @@
 - 正式網址：https://mental-hug.crownai.ink （員工端）
   - 舊網址 `mindcare.crownai.ink` 已改為 301 轉址到新網址，已發出去的個案專區與問卷連結不會斷
 - 個案專區：https://mental-hug.crownai.ink/portal.html
-- pm2 名稱 `mindcare`，埠 3270，TZ=Asia/Taipei
+- pm2 名稱 `mental-hug`，埠 3350，TZ=Asia/Taipei
+  （同一台機器上另有其他以同一套程式碼部署的諮商所，各自獨立的 pm2 程序、埠與資料庫，互不影響）
 - 系統介紹 DM（公開免登入）：https://mental-hug.crownai.ink/mental-hug-intro.pdf
 
 ## 這套系統跟一般客戶管理系統的差別
@@ -133,7 +134,7 @@
   下載範本 → 上傳預覽（完全不寫入）→ 確認匯入，逐列驗證且有任一列錯誤即整批拒絕；
   可選擇略過或更新既有資料，檔案只在記憶體處理不落地，匯入結果記入稽核
 - 紀錄保存與歸檔：結案滿保存年限（預設 7 年）的個案清單，系統只提示不自動刪除
-- 稽核軌跡、每日自動備份（保留 14 份 + `/root/backups/mindcare` 異地鏡像，**個案附件一併同步**）；
+- 稽核軌跡、每日自動備份（保留 14 份 + `/root/backups/mental-hug` 異地鏡像，**個案附件一併同步**）；
   備份後 WAL checkpoint 回收空間，並清理無對應紀錄的孤兒附件檔
 
 ## 技術
@@ -192,12 +193,12 @@ public/
 ## 常用指令
 
 ```bash
-npm start              # 直接啟動（預設埠 3270）
+npm start              # 直接啟動（預設埠 3350）
 npm run seed           # 建立展示資料（已有個案時不重複灌入）
 npm run smoke          # API 冒煙測試（拋棄式資料庫，不碰正式資料）
 npm run smoke:ui       # 前端冒煙：無頭瀏覽器巡過所有頁面抓 JS 錯誤（需執行中的伺服器）
 npm run deploy         # 上線流程：API 冒煙 → 備份 → pm2 重啟 → 前端冒煙（任一步失敗即中止）
-pm2 restart mindcare   # 正式環境重啟（單獨重啟時建議改用 npm run deploy）
+pm2 restart mental-hug # 正式環境重啟（單獨重啟時建議改用 npm run deploy）
 ```
 
 改完程式、重啟正式站之前先跑 `npm run smoke`：它會自己起一個測試用伺服器（隨機空閒埠），

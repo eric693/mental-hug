@@ -12,8 +12,8 @@
 set -euo pipefail
 
 cd "$(dirname "$0")/.."
-APP=mindcare
-PORT=${PORT:-3270}
+APP=mental-hug
+PORT=${PORT:-3350}
 SKIP_UI=${1:-}
 
 step() { printf '\n\033[1m▶ %s\033[0m\n' "$1"; }

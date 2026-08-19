@@ -143,7 +143,7 @@ app.use((err, req, res, next) => {
 const BACKUP_DIR = path.join(DATA_DIR, 'backups');
 const BACKUP_MIRROR = process.env.MINDCARE_BACKUP_MIRROR !== undefined
   ? process.env.MINDCARE_BACKUP_MIRROR
-  : '/root/backups/mindcare';
+  : '/root/backups/mental-hug';   // 與同機其他諮商所的鏡像目錄分開，避免互相覆蓋
 const BACKUP_KEEP = 14;
 
 function unlinkBackup(dir, name) {
@@ -246,7 +246,7 @@ async function dailyMaintenance(force = false) {
 dailyMaintenance();
 setInterval(dailyMaintenance, 6 * 3600 * 1000);
 
-const PORT = process.env.PORT || 3270;
+const PORT = process.env.PORT || 3350;
 app.listen(PORT, () => {
   console.log(`擁抱心理諮商所管理系統 http://localhost:${PORT}`);
   console.log(`個案專區 http://localhost:${PORT}/portal.html`);
