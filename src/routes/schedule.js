@@ -40,6 +40,16 @@ function cleanMeetingUrl(raw) {
   return url;
 }
 
+// 預約的據點：以諮商室所屬據點為準；視訊或未指定諮商室時取該心理師的第一個駐點
+function siteOfRoom(roomId, counselorId) {
+  const r = roomId ? db.prepare('SELECT site_id FROM rooms WHERE id = ?').get(Number(roomId)) : null;
+  if (r && r.site_id) return r.site_id;
+  const u = counselorId
+    ? db.prepare('SELECT site_id FROM user_sites WHERE user_id = ? ORDER BY site_id LIMIT 1').get(Number(counselorId))
+    : null;
+  return (u && u.site_id) || null;
+}
+
 function endTime(start, minutes) {
   const [h, m] = start.split(':').map(Number);
   const t = h * 60 + m + Number(minutes || 50);
@@ -47,12 +57,13 @@ function endTime(start, minutes) {
 }
 
 const LIST_SQL = `SELECT a.*, c.name AS client_name, c.code AS client_code, c.risk_level, c.phone AS client_phone,
-    u.name AS counselor_name, r.name AS room_name,
-    (SELECT COUNT(*) FROM session_notes n WHERE n.appointment_id = a.id) AS has_note
+    u.name AS counselor_name, r.name AS room_name, st.name AS site_name, a.site_id
+  , (SELECT COUNT(*) FROM session_notes n WHERE n.appointment_id = a.id) AS has_note
   FROM appointments a
   LEFT JOIN clients c ON c.id = a.client_id
   LEFT JOIN users u ON u.id = a.counselor_id
-  LEFT JOIN rooms r ON r.id = a.room_id`;
+  LEFT JOIN rooms r ON r.id = a.room_id
+  LEFT JOIN sites st ON st.id = a.site_id`;
 
 router.get('/appointments', requireStaff('schedule'), (req, res) => {
   const { date = '', from = '', to = '', counselor_id = '', client_id = '', status = '' } = req.query;
@@ -63,6 +74,7 @@ router.get('/appointments', requireStaff('schedule'), (req, res) => {
   if (counselor_id) { where.push('a.counselor_id = ?'); args.push(Number(counselor_id)); }
   if (client_id) { where.push('a.client_id = ?'); args.push(Number(client_id)); }
   if (status) { where.push('a.status = ?'); args.push(status); }
+  if (req.query.site_id) { where.push('a.site_id = ?'); args.push(Number(req.query.site_id)); }
   const sql = `${LIST_SQL} ${where.length ? 'WHERE ' + where.join(' AND ') : ''} ORDER BY a.date, a.start_time`;
   res.json(db.prepare(sql).all(...args));
 });
@@ -71,10 +83,13 @@ router.get('/appointments', requireStaff('schedule'), (req, res) => {
 router.get('/schedule/week', requireStaff('schedule'), (req, res) => {
   const start = req.query.start || today();
   const end = addDays(start, 6);
+  const siteId = Number(req.query.site_id) || 0;
   res.json({
-    start, end,
+    start, end, site_id: siteId || '',
+    sites: db.prepare('SELECT id, name, short_name FROM sites WHERE active = 1 ORDER BY sort, id').all(),
     counselors: db.prepare("SELECT id, name FROM users WHERE active = 1 AND role IN ('counselor','supervisor','admin') ORDER BY id").all(),
-    rooms: db.prepare('SELECT id, name FROM rooms WHERE active = 1 ORDER BY id').all(),
+    rooms: db.prepare(`SELECT id, name, site_id FROM rooms WHERE active = 1
+      ${siteId ? 'AND site_id = ?' : ''} ORDER BY id`).all(...(siteId ? [siteId] : [])),
     availability: db.prepare('SELECT * FROM availability ORDER BY weekday, start_time').all(),
     time_off: db.prepare(`SELECT t.*, u.name AS counselor_name FROM time_off t JOIN users u ON u.id = t.counselor_id
       WHERE t.end_date >= ? AND t.start_date <= ?`).all(start, end),
@@ -84,7 +99,9 @@ router.get('/schedule/week', requireStaff('schedule'), (req, res) => {
       FROM group_sessions s JOIN groups g ON g.id = s.group_id
       LEFT JOIN users u ON u.id = g.counselor_id LEFT JOIN rooms r ON r.id = s.room_id
       WHERE s.date BETWEEN ? AND ? AND s.status != 'cancelled' ORDER BY s.date, s.start_time`).all(start, end),
-    appointments: db.prepare(`${LIST_SQL} WHERE a.date BETWEEN ? AND ? ORDER BY a.date, a.start_time`).all(start, end)
+    appointments: db.prepare(`${LIST_SQL} WHERE a.date BETWEEN ? AND ?
+      ${siteId ? 'AND a.site_id = ?' : ''} ORDER BY a.date, a.start_time`)
+      .all(...(siteId ? [start, end, siteId] : [start, end]))
   });
 });
 
@@ -117,11 +134,11 @@ router.post('/appointments', requireStaff('schedule'), (req, res) => {
     ? Number(b.fee)
     : Number(getSetting(b.type === 'intake' ? 'intake_fee' : 'default_fee', '2000'));
   const info = db.prepare(`INSERT INTO appointments
-    (client_id, counselor_id, room_id, date, start_time, end_time, type, mode, status, fee, package_id, source, note, meeting_url, created_by)
-    VALUES (?,?,?,?,?,?,?,?,'booked',?,?,?,?,?,?)`).run(
+    (client_id, counselor_id, room_id, date, start_time, end_time, type, mode, status, fee, package_id, source, note, meeting_url, site_id, created_by)
+    VALUES (?,?,?,?,?,?,?,?,'booked',?,?,?,?,?,?,?)`).run(
     client.id, Number(b.counselor_id), Number(b.room_id) || null, b.date, b.start_time, end_time,
     b.type || 'individual', b.mode || 'onsite', fee, Number(b.package_id) || null,
-    b.source || 'staff', b.note || '', meeting_url, req.user.id);
+    b.source || 'staff', b.note || '', meeting_url, siteOfRoom(b.room_id, b.counselor_id), req.user.id);
   audit('staff', req.user.id, req.user.name, '新增預約', client.code, { date: b.date, time: b.start_time });
   res.json({ id: info.lastInsertRowid });
 });
@@ -146,9 +163,9 @@ router.put('/appointments/:id', requireStaff('schedule'), (req, res) => {
     meeting_url = '';
   }
   db.prepare(`UPDATE appointments SET counselor_id = ?, room_id = ?, date = ?, start_time = ?, end_time = ?,
-    type = ?, mode = ?, fee = ?, note = ?, meeting_url = ? WHERE id = ?`).run(
+    type = ?, mode = ?, fee = ?, note = ?, meeting_url = ?, site_id = ? WHERE id = ?`).run(
     Number(b.counselor_id), Number(b.room_id) || null, b.date, b.start_time, b.end_time,
-    b.type, b.mode, Number(b.fee) || 0, b.note || '', meeting_url, a.id);
+    b.type, b.mode, Number(b.fee) || 0, b.note || '', meeting_url, siteOfRoom(b.room_id, b.counselor_id), a.id);
   audit('staff', req.user.id, req.user.name, '修改預約', String(a.id));
   res.json({ ok: true });
 });
@@ -248,22 +265,80 @@ router.delete('/appointments/:id', requireStaff('schedule'), (req, res) => {
   res.json({ ok: true, opening });
 });
 
+// ---- 據點（分館）----
+// 多據點諮商所：諮商室屬於某個據點，心理師可跨據點看診。
+router.get('/sites', requireStaff(), (req, res) => {
+  res.json(db.prepare(`SELECT s.*,
+      (SELECT COUNT(*) FROM rooms r WHERE r.site_id = s.id AND r.active = 1) AS rooms,
+      (SELECT COUNT(*) FROM user_sites us JOIN users u ON u.id = us.user_id
+        WHERE us.site_id = s.id AND u.active = 1) AS counselors
+    FROM sites s ORDER BY s.active DESC, s.sort, s.id`).all());
+});
+router.post('/sites', requireStaff('settings'), (req, res) => {
+  const b = req.body || {};
+  if (!String(b.name || '').trim()) return res.status(400).json({ error: '請填寫據點名稱' });
+  const info = db.prepare(`INSERT INTO sites (name, short_name, address, phone, transport, note, sort)
+    VALUES (?,?,?,?,?,?,?)`).run(String(b.name).trim(), b.short_name || '', b.address || '',
+    b.phone || '', b.transport || '', b.note || '', Number(b.sort) || 0);
+  audit('staff', req.user.id, req.user.name, '新增據點', String(info.lastInsertRowid), b.name);
+  res.json({ id: info.lastInsertRowid });
+});
+router.put('/sites/:id', requireStaff('settings'), (req, res) => {
+  const s = db.prepare('SELECT * FROM sites WHERE id = ?').get(req.params.id);
+  if (!s) return res.status(404).json({ error: '找不到此據點' });
+  const b = { ...s, ...req.body };
+  db.prepare(`UPDATE sites SET name = ?, short_name = ?, address = ?, phone = ?, transport = ?,
+      note = ?, sort = ?, active = ? WHERE id = ?`)
+    .run(b.name, b.short_name, b.address, b.phone, b.transport, b.note, Number(b.sort) || 0,
+      b.active ? 1 : 0, s.id);
+  audit('staff', req.user.id, req.user.name, '修改據點', String(s.id));
+  res.json({ ok: true });
+});
+
+// 心理師駐點（多對多）：對外預約頁依此列出各據點可約的心理師
+router.put('/counselors/:id/sites', requireStaff('settings'), (req, res) => {
+  const u = db.prepare('SELECT * FROM users WHERE id = ?').get(req.params.id);
+  if (!u) return res.status(404).json({ error: '找不到此帳號' });
+  const ids = Array.isArray((req.body || {}).site_ids) ? req.body.site_ids.map(Number).filter(Boolean) : [];
+  const valid = ids.filter(id => db.prepare('SELECT 1 FROM sites WHERE id = ?').get(id));
+  const tx = db.transaction(() => {
+    db.prepare('DELETE FROM user_sites WHERE user_id = ?').run(u.id);
+    const ins = db.prepare('INSERT OR IGNORE INTO user_sites (user_id, site_id) VALUES (?,?)');
+    for (const id of valid) ins.run(u.id, id);
+  });
+  tx();
+  audit('staff', req.user.id, req.user.name, '設定心理師駐點', String(u.id), valid.join(','));
+  res.json({ ok: true, site_ids: valid });
+});
+router.get('/counselor-sites', requireStaff(), (req, res) => {
+  res.json(db.prepare(`SELECT u.id, u.name, u.license_type, u.specialty,
+      (SELECT GROUP_CONCAT(us.site_id) FROM user_sites us WHERE us.user_id = u.id) AS site_ids
+    FROM users u WHERE u.active = 1 AND u.role IN ('counselor','supervisor','admin')
+    ORDER BY u.id`).all().map(u => ({
+    ...u, site_ids: (u.site_ids || '').split(',').filter(Boolean).map(Number)
+  })));
+});
+
 // ---- 諮商室 ----
 router.get('/rooms', requireStaff(), (req, res) => {
-  res.json(db.prepare('SELECT * FROM rooms ORDER BY active DESC, id').all());
+  res.json(db.prepare(`SELECT r.*, s.name AS site_name FROM rooms r
+    LEFT JOIN sites s ON s.id = r.site_id ORDER BY r.active DESC, s.sort, r.id`).all());
 });
 router.post('/rooms', requireStaff('settings'), (req, res) => {
-  const { name = '', capacity = 1, note = '' } = req.body || {};
+  const { name = '', capacity = 1, note = '', site_id = null } = req.body || {};
   if (!name) return res.status(400).json({ error: '請填寫名稱' });
-  const info = db.prepare('INSERT INTO rooms (name, capacity, note) VALUES (?,?,?)').run(name, Number(capacity) || 1, note);
+  const info = db.prepare('INSERT INTO rooms (name, capacity, note, site_id) VALUES (?,?,?,?)')
+    .run(name, Number(capacity) || 1, note, Number(site_id) || null);
   res.json({ id: info.lastInsertRowid });
 });
 router.put('/rooms/:id', requireStaff('settings'), (req, res) => {
   const r = db.prepare('SELECT * FROM rooms WHERE id = ?').get(req.params.id);
   if (!r) return res.status(404).json({ error: '找不到此諮商室' });
-  const { name = r.name, capacity = r.capacity, note = r.note, active = r.active } = req.body || {};
-  db.prepare('UPDATE rooms SET name = ?, capacity = ?, note = ?, active = ? WHERE id = ?')
-    .run(name, Number(capacity) || 1, note, active ? 1 : 0, r.id);
+  const b = req.body || {};
+  const { name = r.name, capacity = r.capacity, note = r.note, active = r.active } = b;
+  const siteId = b.site_id === undefined ? r.site_id : (Number(b.site_id) || null);
+  db.prepare('UPDATE rooms SET name = ?, capacity = ?, note = ?, active = ?, site_id = ? WHERE id = ?')
+    .run(name, Number(capacity) || 1, note, active ? 1 : 0, siteId, r.id);
   res.json({ ok: true });
 });
 
@@ -623,4 +698,5 @@ module.exports = router;
 module.exports.freeSlots = freeSlots;
 module.exports.endTime = endTime;
 module.exports.conflictOf = conflictOf;
+module.exports.siteOfRoom = siteOfRoom;
 module.exports.matchWaitlist = matchWaitlist;

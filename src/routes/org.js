@@ -250,7 +250,9 @@ router.get('/meta', requireStaff(), (req, res) => {
     modules: MODULES,
     scales: SCALE_KEYS,
     counselors: db.prepare("SELECT id, name, role, license_type FROM users WHERE active = 1 AND role IN ('counselor','supervisor','admin') ORDER BY id").all(),
-    rooms: db.prepare('SELECT id, name FROM rooms WHERE active = 1 ORDER BY id').all(),
+    rooms: db.prepare(`SELECT r.id, r.name, r.site_id, s.name AS site_name FROM rooms r
+      LEFT JOIN sites s ON s.id = r.site_id WHERE r.active = 1 ORDER BY s.sort, r.id`).all(),
+    sites: db.prepare('SELECT id, name, short_name, address, phone FROM sites WHERE active = 1 ORDER BY sort, id').all(),
     session_minutes: Number(getSetting('session_minutes', '50')),
     default_fee: Number(getSetting('default_fee', '2000')),
     intake_fee: Number(getSetting('intake_fee', '2500')),

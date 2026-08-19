@@ -1,5 +1,5 @@
 const express = require('express');
-const { db, audit, today, getSetting, nowStamp } = require('../db');
+const { db, audit, today, getSetting, setSetting, nowStamp } = require('../db');
 const { requireStaff } = require('../auth');
 const line = require('../line');
 const { conflictOf, endTime } = require('./schedule');
@@ -43,13 +43,25 @@ function varsOf(r, extra = {}) {
 // 讓行政人員可以自行用電話問完再代錄回覆，流程不會卡住。
 async function relayToGroup(r) {
   const gid = line.groupIdFor(r.counselor_id);
-  const text = line.fill(getSetting('line_relay_template'), varsOf(r));
+  const v = varsOf(r);
+  const text = line.fill(getSetting('line_relay_template'), v);
+  const flex = line.bubble({
+    title: `${r.kind === 'cancel' ? '請假／取消' : '改期'}申請 #${r.id}`,
+    tone: 'warn',
+    fields: [
+      line.fieldRow('個案', `${v.client}${v.code ? '（' + v.code + '）' : ''}`),
+      line.fieldRow('原訂', v.date ? `${v.date}（${v.weekday}）${v.time}` : '（查無對應預約）'),
+      line.fieldRow('收到時間', String(r.created_at || '').slice(5, 16))
+    ],
+    body: `個案訊息：\n${v.text}`,
+    footer: `請直接在群組回覆可否改期與建議時段；同時有多筆時請在訊息裡寫 #${r.id} 指定。行政人員會據以簽核。`
+  });
   // 先推進狀態再送訊息：LINE 送不出去時（沒設群組、對方 API 慢或掛掉）
   // 申請仍會出現在「待心理師回覆」，行政人員可以自己打電話問完再代錄，流程不會卡在「待轉達」。
   db.prepare("UPDATE reschedule_requests SET status = 'relayed', relayed_at = ? WHERE id = ? AND status = 'new'")
     .run(nowStamp(), r.id);
   return line.send({
-    to: gid, text,
+    to: gid, text, flex,
     meta: { source_type: 'group', client_id: r.client_id, counselor_id: r.counselor_id, request_id: r.id }
   });
 }
@@ -69,6 +81,28 @@ router.post('/line/webhook', async (req, res) => {
 });
 
 async function handleEvent(ev) {
+  const src0 = ev.source || {};
+  // 被拉進群組（join）當下就把 groupId 記下來，行政人員不必自己去翻 ID
+  if (ev.type === 'join' && (src0.type === 'group' || src0.type === 'room')) {
+    const gid = src0.groupId || src0.roomId;
+    const known = db.prepare('SELECT name FROM users WHERE line_group_id = ?').get(gid);
+    line.logEvent({ direction: 'in', source_type: 'group', source_id: gid, text: '（官方帳號加入此群組）' });
+    const joinText = known
+      ? `已連結到 ${known.name} 心理師的群組，個案的改期／請假訊息會轉到這裡。`
+      : '已加入。請所方到系統的「LINE 傳話設定」把這個群組指派給對應的心理師，之後個案的改期／請假訊息就會轉到這裡。';
+    return line.send({
+      kind: 'reply', replyToken: ev.replyToken, to: gid,
+      text: joinText,
+      flex: line.bubble({
+        title: known ? '傳話機器人已就緒' : '傳話機器人已加入',
+        tone: known ? 'ok' : 'warn',
+        fields: [line.fieldRow('諮商所', getSetting('center_name')),
+          line.fieldRow('對應心理師', known ? known.name : '尚未指派')],
+        body: joinText
+      }),
+      meta: { source_type: 'group' }
+    });
+  }
   if (ev.type !== 'message' || !ev.message || ev.message.type !== 'text') return;
   const text = String(ev.message.text || '').trim().slice(0, 1000);
   const src = ev.source || {};
@@ -92,22 +126,44 @@ async function handleUserMessage(userId, text, replyToken) {
       const hit = db.prepare(`SELECT * FROM clients WHERE active = 1
         AND REPLACE(REPLACE(phone,'-',''),' ','') = ?`).get(phone);
       if (!hit) {
-        return line.send({ kind: 'reply', replyToken, to: userId, text: '查不到這個手機號碼的資料，請確認號碼是否與登記時相同，或直接來電諮商所。', meta: { source_type: 'user' } });
+        const t = '查不到這個手機號碼的資料，請確認號碼是否與登記時相同，或直接來電諮商所。';
+        return line.send({
+          kind: 'reply', replyToken, to: userId, text: t,
+          flex: line.bubble({ title: '綁定失敗', tone: 'danger', body: t,
+            footer: getSetting('center_phone') ? '諮商所電話：' + getSetting('center_phone') : '' }),
+          meta: { source_type: 'user' }
+        });
       }
       if (hit.line_user_id && hit.line_user_id !== userId) {
-        return line.send({ kind: 'reply', replyToken, to: userId, text: '此號碼已綁定其他 LINE 帳號，請來電諮商所協助處理。', meta: { source_type: 'user', client_id: hit.id } });
+        const t = '此號碼已綁定其他 LINE 帳號，請來電諮商所協助處理。';
+        return line.send({
+          kind: 'reply', replyToken, to: userId, text: t,
+          flex: line.bubble({ title: '綁定失敗', tone: 'danger', body: t }),
+          meta: { source_type: 'user', client_id: hit.id }
+        });
       }
       db.prepare('UPDATE clients SET line_user_id = ? WHERE id = ?').run(userId, hit.id);
       audit('system', null, 'LINE', '個案綁定 LINE', String(hit.id));
       return line.send({
         kind: 'reply', replyToken, to: userId,
         text: `${hit.name} 您好，已完成綁定。日後如需請假或改期，直接在此傳訊息告訴我們即可。`,
+        flex: line.bubble({
+          title: '綁定完成', tone: 'ok',
+          fields: [line.fieldRow('姓名', hit.name), line.fieldRow('諮商所', getSetting('center_name'))],
+          body: '日後如需請假或改期，直接在此傳訊息告訴我們即可，我們會轉達給您的心理師。',
+          footer: '本對話僅處理預約與行政事項；晤談內容請於晤談時與心理師討論。'
+        }),
         meta: { source_type: 'user', client_id: hit.id }
       });
     }
+    const hint = line.fill(getSetting('line_bind_hint'),
+      { center: getSetting('center_name'), phone: getSetting('center_phone') });
     return line.send({
-      kind: 'reply', replyToken, to: userId,
-      text: line.fill(getSetting('line_bind_hint'), { center: getSetting('center_name'), phone: getSetting('center_phone') }),
+      kind: 'reply', replyToken, to: userId, text: hint,
+      flex: line.bubble({
+        title: '請先完成身分綁定', tone: 'warn', body: hint,
+        footer: '格式範例：綁定 0912345678'
+      }),
       meta: { source_type: 'user' }
     });
   }
@@ -121,9 +177,10 @@ async function handleUserMessage(userId, text, replyToken) {
   if (!isReschedule) {
     // 非請假／改期的訊息一律進「個案訊息」讓櫃檯回覆，不打擾心理師群組
     db.prepare("INSERT INTO messages (client_id, sender, content) VALUES (?, 'client', ?)").run(client.id, text);
+    const ack = line.fill(getSetting('line_ack_client'), { phone: getSetting('center_phone') });
     return line.send({
-      kind: 'reply', replyToken, to: userId,
-      text: line.fill(getSetting('line_ack_client'), { phone: getSetting('center_phone') }),
+      kind: 'reply', replyToken, to: userId, text: ack,
+      flex: line.bubble({ title: '已收到您的訊息', tone: 'info', body: ack }),
       meta: { source_type: 'user', client_id: client.id }
     });
   }
@@ -138,9 +195,19 @@ async function handleUserMessage(userId, text, replyToken) {
 
   // 先轉達心理師群組（這步會把申請推進到「待心理師回覆」），再回覆個案已收到
   await relayToGroup(r);
+  const ackText = line.fill(getSetting('line_ack_client'), { phone: getSetting('center_phone') });
   await line.send({
-    kind: 'reply', replyToken, to: userId,
-    text: line.fill(getSetting('line_ack_client'), { phone: getSetting('center_phone') }),
+    kind: 'reply', replyToken, to: userId, text: ackText,
+    flex: line.bubble({
+      title: kind === 'cancel' ? '已收到您的請假需求' : '已收到您的改期需求',
+      tone: 'info',
+      fields: [
+        line.fieldRow('原訂時段', appt ? `${appt.date}（${line.weekdayName(appt.date)}）${appt.start_time}-${appt.end_time}` : '（查無預約，將由櫃檯確認）'),
+        line.fieldRow('申請編號', '#' + r.id)
+      ],
+      body: ackText,
+      footer: '確認後我們會在這個對話框回覆您新的時間。'
+    }),
     meta: { source_type: 'user', client_id: client.id, request_id: r.id }
   });
 }
@@ -177,6 +244,11 @@ async function handleGroupMessage(groupId, text, replyToken) {
   await line.send({
     kind: 'reply', replyToken, to: groupId,
     text: `已記錄您對 #${r.id}（${r.client_name}）的回覆，行政人員簽核後會同步通知個案。`,
+    flex: line.bubble({
+      title: `已記錄回覆 #${r.id}`, tone: 'ok',
+      fields: [line.fieldRow('個案', r.client_name || ''), line.fieldRow('您的回覆', text)],
+      body: '行政人員簽核後，系統會同步通知個案並更新時間表。'
+    }),
     meta: { source_type: 'group', counselor_id: r.counselor_id, request_id: r.id }
   });
 }
@@ -271,12 +343,34 @@ router.post('/api/reschedule-requests/:id/approve', requireStaff('line'), async 
   // 同步回覆：個案的官方帳號對話框與心理師群組
   const fresh = requestRow(r.id);
   const v = varsOf(fresh);
+  const site = appt.site_id ? db.prepare('SELECT name, address FROM sites WHERE id = ?').get(appt.site_id) : null;
   const toClient = await line.send({
     to: fresh.line_user_id, text: line.fill(getSetting('line_done_client'), v),
+    flex: line.bubble({
+      title: '改期完成', tone: 'ok',
+      fields: [
+        line.fieldRow('新時間', `${v.new_date}（${v.new_weekday}）${v.new_time}`),
+        line.fieldRow('心理師', v.counselor),
+        ...(site ? [line.fieldRow('地點', site.name + (site.address ? '　' + site.address : ''))] : []),
+        line.fieldRow('原訂', `${v.date}（${v.weekday}）${v.time}`)
+      ],
+      body: line.fill(getSetting('line_done_client'), v),
+      footer: getSetting('center_phone') ? `如有問題請來電 ${getSetting('center_phone')}` : ''
+    }),
     meta: { source_type: 'user', client_id: fresh.client_id, request_id: fresh.id }
   });
   const toGroup = await line.send({
     to: line.groupIdFor(fresh.counselor_id), text: line.fill(getSetting('line_done_group'), v),
+    flex: line.bubble({
+      title: `已簽核改期 #${fresh.id}`, tone: 'ok',
+      fields: [
+        line.fieldRow('個案', `${v.client}${v.code ? '（' + v.code + '）' : ''}`),
+        line.fieldRow('原訂', `${v.date}（${v.weekday}）${v.time}`),
+        line.fieldRow('改為', `${v.new_date}（${v.new_weekday}）${v.new_time}`),
+        line.fieldRow('簽核人', req.user.name)
+      ],
+      body: '時間表已更新，個案端也已同步通知。'
+    }),
     meta: { source_type: 'group', counselor_id: fresh.counselor_id, request_id: fresh.id }
   });
   res.json({ ok: true, client: toClient, group: toGroup });
@@ -293,6 +387,12 @@ router.post('/api/reschedule-requests/:id/reject', requireStaff('line'), async (
   const v = varsOf(requestRow(r.id));
   const out = (req.body || {}).notify === false ? { status: 'skipped' } : await line.send({
     to: r.line_user_id, text: line.fill(getSetting('line_reject_client'), v),
+    flex: line.bubble({
+      title: '關於您的改期需求', tone: 'warn',
+      fields: [line.fieldRow('原訂', v.date ? `${v.date}（${v.weekday}）${v.time}` : '-')],
+      body: line.fill(getSetting('line_reject_client'), v),
+      footer: getSetting('center_phone') ? `諮商所電話：${getSetting('center_phone')}` : ''
+    }),
     meta: { source_type: 'user', client_id: r.client_id, request_id: r.id }
   });
   res.json({ ok: true, client: out });
@@ -306,16 +406,116 @@ router.get('/api/line/events', requireStaff('line'), (req, res) => {
 });
 
 // LINE 綁定狀態：哪些個案已綁、哪些心理師設了群組
+// 憑證只回遮罩後的樣子：畫面上要看得出「填了沒、是不是同一組」，但不把完整值再送出去
+function mask(v) {
+  const s2 = String(v || '').trim();
+  if (!s2) return '';
+  return s2.length <= 8 ? '••••' : `${s2.slice(0, 4)}••••${s2.slice(-4)}（${s2.length} 字）`;
+}
+
 router.get('/api/line/status', requireStaff('line'), (req, res) => {
+  // 曾經傳過訊息、但還沒指派給任何心理師的群組：直接列出來讓行政一鍵指派
+  const unassigned = db.prepare(`SELECT e.source_id,
+      MAX(e.created_at) AS last_at, COUNT(*) AS n,
+      (SELECT text FROM line_events x WHERE x.source_id = e.source_id AND x.direction = 'in'
+        ORDER BY x.id DESC LIMIT 1) AS last_text
+    FROM line_events e
+    WHERE e.source_type = 'group' AND e.source_id <> ''
+      AND NOT EXISTS (SELECT 1 FROM users u WHERE u.line_group_id = e.source_id)
+      AND e.source_id <> ?
+    GROUP BY e.source_id ORDER BY last_at DESC LIMIT 20`).all(getSetting('line_default_group_id', '').trim());
   res.json({
     enabled: line.enabled(),
     webhook_url: '/line/webhook',
+    has_secret: !!getSetting('line_channel_secret', '').trim(),
+    has_token: !!getSetting('line_channel_token', '').trim(),
+    secret_masked: mask(getSetting('line_channel_secret', '')),
+    token_masked: mask(getSetting('line_channel_token', '')),
+    default_group_id: getSetting('line_default_group_id', '').trim(),
+    keywords: getSetting('line_keywords', ''),
+    unassigned_groups: unassigned,
     default_group: !!getSetting('line_default_group_id', '').trim(),
     bound_clients: db.prepare("SELECT COUNT(*) n FROM clients WHERE active = 1 AND line_user_id <> ''").get().n,
     active_clients: db.prepare('SELECT COUNT(*) n FROM clients WHERE active = 1').get().n,
     counselors: db.prepare(`SELECT id, name, line_group_id FROM users
       WHERE active = 1 AND role IN ('counselor','supervisor','admin') ORDER BY id`).all()
   });
+});
+
+// 在「LINE 傳話設定」頁直接填憑證：留空的欄位不動（避免遮罩值把原本的蓋掉）
+router.put('/api/line/credentials', requireStaff('line'), (req, res) => {
+  const b = req.body || {};
+  const fields = {
+    line_channel_secret: b.line_channel_secret,
+    line_channel_token: b.line_channel_token,
+    line_default_group_id: b.line_default_group_id,
+    line_keywords: b.line_keywords
+  };
+  const changed = [];
+  for (const [k, v] of Object.entries(fields)) {
+    if (v === undefined || v === null) continue;
+    const val = String(v).trim();
+    // 憑證留空＝不變更；要清空請用 clear_secret / clear_token
+    if (!val && (k === 'line_channel_secret' || k === 'line_channel_token')) continue;
+    setSetting(k, val);
+    changed.push(k);
+  }
+  if (b.clear_secret) { setSetting('line_channel_secret', ''); changed.push('line_channel_secret(清除)'); }
+  if (b.clear_token) { setSetting('line_channel_token', ''); changed.push('line_channel_token(清除)'); }
+  audit('staff', req.user.id, req.user.name, '設定 LINE 憑證', '', changed.join(','));
+  res.json({ ok: true, changed });
+});
+
+// 驗證憑證：真的打一次 LINE API 問「這個 token 是哪個官方帳號」，
+// 順便回報目前登記的 webhook 網址與配額，才不用等個案傳訊息才發現填錯。
+router.post('/api/line/verify', requireStaff('line'), async (req, res) => {
+  const token = String((req.body || {}).line_channel_token || '').trim()
+    || getSetting('line_channel_token', '').trim();
+  if (!token) return res.status(400).json({ error: '請先填入 Channel access token' });
+  const out = { ok: false, bot: null, webhook: null, quota: null, errors: [] };
+  try {
+    out.bot = await line.callLine('/info', undefined, 'GET', token);
+    out.ok = true;
+  } catch (e) {
+    return res.status(400).json({ error: `token 驗證失敗：${e.message}` });
+  }
+  try { out.webhook = await line.callLine('/channel/webhook/endpoint', undefined, 'GET', token); }
+  catch (e) { out.errors.push(`讀取 webhook 設定失敗：${e.message}`); }
+  try { out.quota = await line.callLine('/message/quota', undefined, 'GET', token); }
+  catch (e) { out.errors.push(`讀取訊息配額失敗：${e.message}`); }
+  out.expected_webhook = `${req.protocol}://${req.get('host')}/line/webhook`;
+  out.secret_set = !!getSetting('line_channel_secret', '').trim();
+  audit('staff', req.user.id, req.user.name, '驗證 LINE 憑證', '', out.bot && out.bot.basicId);
+  res.json(out);
+});
+
+// 由系統代為把 webhook 網址寫回 LINE，並要求 LINE 實際打一次測試
+router.post('/api/line/webhook-endpoint', requireStaff('line'), async (req, res) => {
+  const url = `${req.protocol}://${req.get('host')}/line/webhook`;
+  try {
+    await line.callLine('/channel/webhook/endpoint', { endpoint: url }, 'PUT');
+    const test = await line.callLine('/channel/webhook/test', { endpoint: url });
+    audit('staff', req.user.id, req.user.name, '設定 LINE webhook 網址', '', url);
+    res.json({ ok: true, endpoint: url, test });
+  } catch (e) {
+    res.status(400).json({ error: `設定失敗：${e.message}` });
+  }
+});
+
+// 對指定對象送一則測試訊息，確認真的到得了群組
+router.post('/api/line/test-push', requireStaff('line'), async (req, res) => {
+  const to = String((req.body || {}).to || '').trim();
+  if (!to) return res.status(400).json({ error: '請指定要測試的對象（群組 ID 或使用者 ID）' });
+  const out = await line.send({
+    to, text: `${getSetting('center_name')} 系統測試訊息：這個群組已與傳話機器人連線成功。`,
+    flex: line.bubble({
+      title: '連線測試', tone: 'ok',
+      fields: [line.fieldRow('諮商所', getSetting('center_name')), line.fieldRow('測試人', req.user.name)],
+      body: '看得到這則卡片，表示傳話機器人可以正常送訊息到這裡。'
+    }),
+    meta: { source_type: 'group' }
+  });
+  res.json(out);
 });
 
 // 設定／清除心理師群組

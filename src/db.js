@@ -207,6 +207,28 @@ db.exec(`CREATE TABLE IF NOT EXISTS intake_forms (
 );
 CREATE INDEX IF NOT EXISTS idx_intakeform_status ON intake_forms(status, created_at);`);
 
+// ---- 據點（分館）----
+// 多據點諮商所：諮商室屬於某個據點，心理師可跨據點看診（多對多），
+// 預約的據點由諮商室決定，視訊晤談則沿用心理師的主要據點。
+db.exec(`CREATE TABLE IF NOT EXISTS sites (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  name TEXT NOT NULL,
+  short_name TEXT NOT NULL DEFAULT '',
+  address TEXT NOT NULL DEFAULT '',
+  phone TEXT NOT NULL DEFAULT '',
+  transport TEXT NOT NULL DEFAULT '',          -- 交通方式（印在給個案的通知與對外預約頁）
+  note TEXT NOT NULL DEFAULT '',
+  sort INTEGER NOT NULL DEFAULT 0,
+  active INTEGER NOT NULL DEFAULT 1
+);
+CREATE TABLE IF NOT EXISTS user_sites (
+  user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  site_id INTEGER NOT NULL REFERENCES sites(id) ON DELETE CASCADE,
+  PRIMARY KEY (user_id, site_id)
+);`);
+ensureColumns('rooms', { site_id: 'INTEGER REFERENCES sites(id)' });
+ensureColumns('appointments', { site_id: 'INTEGER REFERENCES sites(id)' });
+
 // 前台可編輯文字（系統設定頁維護；清空即隱藏該區塊）
 const UI_TEXT_DEFAULTS = {
   ui_staff_login_title: '擁抱心理',
@@ -331,7 +353,15 @@ const UI_TEXT_KEYS = Object.keys(UI_TEXT_DEFAULTS);
     // 細項開關：繼續教育積分區塊（關閉後「請假與繼續教育」只留請假）
     feature_ce: '0',
     time_off_reasons: '特休,病假,事假,研習,督導,公假,其他',
-    group_topics: '情緒調適,人際關係,壓力管理,親職教養,悲傷輔導,正念練習'
+    group_topics: '情緒調適,人際關係,壓力管理,親職教養,悲傷輔導,正念練習',
+    // 對外預約頁（免登入）：關閉後 /booking.html 只顯示請來電
+    public_booking_enabled: '1',
+    public_booking_notice: '本所為全預約制。送出後我們會在服務時間內與您電話確認時段與費用，'
+      + '確認完成才算預約成功。若為未滿 18 歲之未成年人，需由法定代理人陪同並簽署同意書。',
+    // 諮商主題：來電登記、對外預約頁與心理師專長共用的清單
+    topic_options: '情緒困擾（憂鬱、焦慮）,壓力與職場適應,婚姻與伴侶關係,性治療與親密關係,家族與親子關係,'
+      + '親職教養,人際關係,自我探索與生涯,創傷與失落,成癮議題,兒童與青少年,性別與多元性別議題,'
+      + '催眠治療,睡眠困擾,其他'
   };
   const has = db.prepare('SELECT 1 FROM settings WHERE key = ?');
   const ins = db.prepare('INSERT INTO settings (key, value) VALUES (?, ?)');

@@ -959,7 +959,8 @@ App.page('settings', {
         ['source_options', '轉介來源'], ['close_reasons', '結案原因'], ['risk_types', '危機事件類型'],
         ['report_channels', '通報管道'], ['pay_methods', '付款方式'], ['payer_types', '付款人別'],
         ['partner_types', '合作單位類別'], ['time_off_reasons', '請假事由'], ['subsidy_programs', '政府補助方案'],
-        ['ce_categories', '繼續教育類別'], ['group_topics', '團體主題']]],
+        ['ce_categories', '繼續教育類別'], ['group_topics', '團體主題'],
+        ['topic_options', '諮商主題（來電登記、對外預約頁與心理師專長共用）']]],
       ['前台文字（清空即隱藏）', [['ui_staff_login_title', '員工登入頁 標題'], ['ui_staff_login_sub', '員工登入頁 副標'],
         ['ui_demo_staff', '員工登入頁 提示框'], ['ui_portal_title', '個案端 標題'], ['ui_portal_login_sub', '個案端 副標'],
         ['ui_portal_login_hint', '個案端 登入說明'], ['ui_demo_portal', '個案端 提示框'],
@@ -981,7 +982,9 @@ App.page('settings', {
         (String(s[k] || '').length > 40 || k === 'reminder_template' || k.startsWith('line_') && k.endsWith('_template') || k.startsWith('line_done') || k === 'line_bind_hint' || k === 'line_ack_client' || k === 'line_reject_client' || k === 'shift_quick_fills' || k === 'safety_plan_resources' || k.startsWith('ui_demo') || k === 'ui_portal_note' || k === 'ui_crisis_note' || k.endsWith('_options') || k.endsWith('_types') || k.endsWith('_methods') || k.endsWith('_reasons') || k.endsWith('_channels'))
           ? UI.textarea(k, l, { value: s[k] || '' })
           : UI.input(k, l, { value: s[k] || '' })).join('')}</div></div>`).join('') +
-      `<div class="card"><h3>諮商室</h3><div id="rooms"></div></div>
+      `<div class="card"><h3>據點（分館）</h3><div id="sites"></div></div>
+       <div class="card"><h3>心理師駐點</h3><div id="csites"></div></div>
+       <div class="card"><h3>諮商室</h3><div id="rooms"></div></div>
        <div class="card"><h3>同意書範本</h3><div id="consents"></div></div>
        ${App.me.role === 'admin' ? `<div class="card"><h3>資料備份</h3>
          <div style="font-size:13px;color:var(--muted);margin-bottom:10px">
@@ -1014,16 +1017,88 @@ App.page('settings', {
       UI.toast('已儲存，重新整理後生效');
     };
 
+    // ---- 據點 ----
+    const sites = await GET('/sites');
+    const siteOpts = [['', '未指定據點']].concat(sites.filter(x => x.active).map(x => [x.id, x.name]));
+    const sb = el.querySelector('#sites');
+    const siteForm = st => `<div class="form-grid">
+      ${UI.input('name', '據點名稱', { value: st ? st.name : '' })}
+      ${UI.input('short_name', '簡稱（表格與訊息用）', { value: st ? st.short_name : '' })}
+      ${UI.input('phone', '電話', { value: st ? st.phone : '' })}
+      ${UI.input('sort', '排序', { type: 'number', value: st ? st.sort : 0 })}
+      ${UI.input('address', '地址', { value: st ? st.address : '', full: true })}
+      ${UI.textarea('transport', '交通方式（會印在對外預約頁與提醒訊息）', { value: st ? st.transport : '' })}
+      ${UI.textarea('note', '備註', { value: st ? st.note : '' })}
+      ${st ? UI.checkbox('active', '啟用', st.active) : ''}</div>`;
+    sb.innerHTML = UI.table(['據點', '簡稱', '電話', '地址', '諮商室', '心理師', '狀態', ''], sites.map(x => `<tr>
+        <td>${UI.esc(x.name)}</td><td>${UI.esc(x.short_name || '-')}</td><td>${UI.esc(x.phone || '-')}</td>
+        <td style="font-size:13px">${UI.esc(x.address || '-')}</td>
+        <td>${x.rooms}</td><td>${x.counselors}</td>
+        <td>${x.active ? UI.tag('啟用', 'ok') : UI.tag('停用')}</td>
+        <td><button class="btn tiny secondary" data-st="${x.id}">編輯</button></td></tr>`), '尚未建立據點') +
+      '<button class="btn small" id="as" style="margin-top:10px">新增據點</button>';
+    sb.querySelector('#as').onclick = () => UI.modal({
+      title: '新增據點', body: siteForm(null),
+      onSubmit: async e => { await POST('/sites', UI.formData(e)); App.go('settings'); }
+    });
+    sb.querySelectorAll('[data-st]').forEach(b => {
+      const st = sites.find(x => x.id === Number(b.dataset.st));
+      b.onclick = () => UI.modal({
+        title: `編輯據點 ${st.name}`, body: siteForm(st),
+        onSubmit: async e => { await PUT(`/sites/${st.id}`, UI.formData(e)); App.go('settings'); }
+      });
+    });
+
+    // ---- 心理師駐點（多對多）----
+    const cs = await GET('/counselor-sites');
+    const cb2 = el.querySelector('#csites');
+    cb2.innerHTML = `<div style="font-size:12.5px;color:var(--muted);margin-bottom:10px">
+        心理師可跨據點看診；對外預約頁依此列出各據點可預約的心理師。</div>` +
+      UI.table(['心理師', '證照', '駐點', ''], cs.map(u => `<tr>
+        <td>${UI.esc(u.name)}</td><td>${UI.esc(u.license_type || '-')}</td>
+        <td>${u.site_ids.length ? u.site_ids.map(id => UI.tag((sites.find(x => x.id === id) || {}).short_name
+    || (sites.find(x => x.id === id) || {}).name || id, '')).join('') : '<span style="color:var(--muted)">未設定</span>'}</td>
+        <td><button class="btn tiny secondary" data-cs="${u.id}">設定</button></td></tr>`));
+    cb2.querySelectorAll('[data-cs]').forEach(b => {
+      const u = cs.find(x => x.id === Number(b.dataset.cs));
+      b.onclick = () => UI.modal({
+        title: `${u.name} 的駐點`,
+        body: `<div class="form-grid">${sites.filter(x => x.active)
+    .map(x => UI.checkbox('site_' + x.id, x.name, u.site_ids.includes(x.id))).join('')}</div>`,
+        onSubmit: async e => {
+          const d = UI.formData(e);
+          const ids = Object.entries(d).filter(([k, v]) => k.startsWith('site_') && v).map(([k]) => Number(k.slice(5)));
+          await PUT(`/counselors/${u.id}/sites`, { site_ids: ids });
+          App.go('settings');
+        }
+      });
+    });
+
+    // ---- 諮商室 ----
     const rooms = await GET('/rooms');
     const rb = el.querySelector('#rooms');
-    rb.innerHTML = UI.table(['名稱', '容納人數', '備註', '狀態'], rooms.map(r => `<tr>
-        <td>${UI.esc(r.name)}</td><td>${r.capacity}</td><td>${UI.esc(r.note)}</td>
-        <td>${r.active ? UI.tag('啟用', 'ok') : UI.tag('停用')}</td></tr>`)) +
+    rb.innerHTML = UI.table(['名稱', '據點', '容納人數', '備註', '狀態', ''], rooms.map(r => `<tr>
+        <td>${UI.esc(r.name)}</td><td>${UI.esc(r.site_name || '未指定')}</td>
+        <td>${r.capacity}</td><td>${UI.esc(r.note)}</td>
+        <td>${r.active ? UI.tag('啟用', 'ok') : UI.tag('停用')}</td>
+        <td><button class="btn tiny secondary" data-rm="${r.id}">編輯</button></td></tr>`)) +
       '<button class="btn small" id="ar" style="margin-top:10px">新增諮商室</button>';
+    const roomForm = r => `<div class="form-grid">
+      ${UI.input('name', '名稱', { value: r ? r.name : '' })}
+      ${UI.select('site_id', '所屬據點', siteOpts, { value: r ? (r.site_id || '') : '' })}
+      ${UI.input('capacity', '容納人數', { type: 'number', value: r ? r.capacity : 1 })}
+      ${UI.input('note', '備註', { value: r ? r.note : '', full: true })}
+      ${r ? UI.checkbox('active', '啟用', r.active) : ''}</div>`;
     rb.querySelector('#ar').onclick = () => UI.modal({
-      title: '新增諮商室',
-      body: `<div class="form-grid">${UI.input('name', '名稱')}${UI.input('capacity', '容納人數', { type: 'number', value: 1 })}${UI.input('note', '備註', { full: true })}</div>`,
+      title: '新增諮商室', body: roomForm(null),
       onSubmit: async e => { await POST('/rooms', UI.formData(e)); App.go('settings'); }
+    });
+    rb.querySelectorAll('[data-rm]').forEach(b => {
+      const r = rooms.find(x => x.id === Number(b.dataset.rm));
+      b.onclick = () => UI.modal({
+        title: `編輯諮商室 ${r.name}`, body: roomForm(r),
+        onSubmit: async e => { await PUT(`/rooms/${r.id}`, UI.formData(e)); App.go('settings'); }
+      });
     });
 
     const templates = await GET('/consent-templates');

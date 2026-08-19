@@ -33,29 +33,84 @@ function logEvent(row) {
     });
 }
 
-async function callLine(pathname, body) {
-  const token = getSetting('line_channel_token', '').trim();
+async function callLine(pathname, body, method = 'POST', tokenOverride = '') {
+  const token = (tokenOverride || getSetting('line_channel_token', '')).trim();
   if (!token) throw new Error('尚未設定 LINE Channel access token');
   const ctl = new AbortController();
   const timer = setTimeout(() => ctl.abort(), 10000);
   try {
     const resp = await fetch(LINE_API + pathname, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
-      body: JSON.stringify(body),
+      method,
+      headers: {
+        Authorization: `Bearer ${token}`,
+        ...(body === undefined ? {} : { 'Content-Type': 'application/json' })
+      },
+      body: body === undefined ? undefined : JSON.stringify(body),
       signal: ctl.signal
     });
-    if (!resp.ok) {
-      const text = (await resp.text().catch(() => '')).slice(0, 200);
-      throw new Error(`LINE API ${resp.status} ${text}`);
-    }
-    return true;
+    const text = await resp.text().catch(() => '');
+    if (!resp.ok) throw new Error(`LINE API ${resp.status} ${text.slice(0, 200)}`);
+    try { return JSON.parse(text); } catch { return true; }
   } finally { clearTimeout(timer); }
+}
+
+// ---- Flex Message ----
+// 所有對外訊息都用 Flex 泡泡送：純文字在群組裡會被其他對話淹沒，
+// Flex 有標題列與欄位排版，心理師一眼就知道是哪位個案的哪一筆申請。
+// altText 一律帶原本的文字版：通知列、舊版 LINE 與無法顯示 Flex 的環境仍看得懂。
+
+const BRAND = '#4E5556';        // 擁抱心理標誌的暖灰
+const BRAND_SOFT = '#F4CCC3';   // 淡珊瑚
+const TONE = { info: BRAND, warn: '#B7791F', ok: '#1E8E3E', danger: '#C0392B' };
+
+function textBox(t) {
+  return { type: 'text', text: String(t || '-'), wrap: true, size: 'sm', color: '#333333' };
+}
+// 「標籤：內容」一列；內容過長會自動換行
+function fieldRow(label, value) {
+  return {
+    type: 'box', layout: 'baseline', spacing: 'sm', contents: [
+      { type: 'text', text: String(label), size: 'sm', color: '#8A8F90', flex: 2 },
+      { type: 'text', text: String(value === '' || value === undefined || value === null ? '-' : value), wrap: true, size: 'sm', color: '#1F2D3D', flex: 5 }
+    ]
+  };
+}
+
+// 一張泡泡：標題列（品牌色）＋ 欄位 ＋ 說明文字
+function bubble({ title, tone = 'info', fields = [], body = '', footer = '' }) {
+  const contents = [];
+  if (fields.length) contents.push({ type: 'box', layout: 'vertical', spacing: 'sm', contents: fields });
+  if (body) {
+    if (contents.length) contents.push({ type: 'separator', margin: 'md' });
+    contents.push({ type: 'box', layout: 'vertical', margin: 'md', contents: [textBox(body)] });
+  }
+  if (!contents.length) contents.push(textBox(body || ''));
+  return {
+    type: 'bubble',
+    header: {
+      type: 'box', layout: 'vertical', paddingAll: '12px',
+      backgroundColor: TONE[tone] || TONE.info,
+      contents: [{ type: 'text', text: String(title), color: '#FFFFFF', weight: 'bold', size: 'md', wrap: true }]
+    },
+    body: { type: 'box', layout: 'vertical', spacing: 'md', paddingAll: '14px', contents },
+    ...(footer ? {
+      footer: {
+        type: 'box', layout: 'vertical', paddingAll: '10px', backgroundColor: BRAND_SOFT,
+        contents: [{ type: 'text', text: String(footer), size: 'xs', color: '#4E5556', wrap: true }]
+      }
+    } : {})
+  };
+}
+
+function flexMessage(altText, bub) {
+  // altText 是通知列文字，LINE 限 400 字
+  return { type: 'flex', altText: String(altText || '通知').replace(/\n/g, ' ').slice(0, 395), contents: bub };
 }
 
 // 送訊息並留軌跡；通道未開或沒有收件對象時記為 skipped，不視為錯誤
 // （所方還沒接上官方帳號時，流程照樣能在系統內跑完）。
-async function send({ to, text, kind = 'push', replyToken = '', meta = {} }) {
+// flex 有給就送 Flex 泡泡，沒給就退回純文字（text 一律要填，會當成 altText 與軌跡內容）。
+async function send({ to, text, flex = null, kind = 'push', replyToken = '', meta = {} }) {
   const base = { direction: 'out', text, source_id: to || '', ...meta };
   if (!enabled()) {
     logEvent({ ...base, status: 'skipped', error: '尚未設定 LINE 憑證' });
@@ -65,9 +120,10 @@ async function send({ to, text, kind = 'push', replyToken = '', meta = {} }) {
     logEvent({ ...base, status: 'skipped', error: '沒有收件對象' });
     return { ok: false, status: 'skipped', message: '沒有收件對象，訊息未送出' };
   }
+  const message = flex ? flexMessage(text, flex) : { type: 'text', text };
   try {
-    if (kind === 'reply') await callLine('/message/reply', { replyToken, messages: [{ type: 'text', text }] });
-    else await callLine('/message/push', { to, messages: [{ type: 'text', text }] });
+    if (kind === 'reply') await callLine('/message/reply', { replyToken, messages: [message] });
+    else await callLine('/message/push', { to, messages: [message] });
     logEvent({ ...base, status: 'ok' });
     return { ok: true, status: 'sent' };
   } catch (e) {
@@ -103,6 +159,7 @@ function groupIdFor(counselorId) {
 }
 
 module.exports = {
-  enabled, verifySignature, send, fill, weekdayName, logEvent,
+  enabled, verifySignature, send, fill, weekdayName, logEvent, callLine,
+  bubble, fieldRow, flexMessage,
   looksLikeReschedule, groupIdFor, nowStamp
 };

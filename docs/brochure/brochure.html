@@ -123,7 +123,8 @@
   <div class="card"><h4>線上視訊晤談<span class="tag">遠距</span></h4><p>預約形式選「視訊」即自動帶入該心理師的<strong>固定會議室連結</strong>（於帳號設定一次），也可逐筆指定。連結只接受 http(s) 完整網址，<strong>自動附加在晤談提醒訊息裡</strong>；個案在專區首頁直接看到「進入視訊晤談」按鈕，心理師則在今日看板與本週排程一鍵進入。到所與視訊的服務量比例列入月報，方案與評鑑報表需要時可直接引用。</p></div>
   <div class="card"><h4>我的工作台<span class="tag">心理師視角</span></h4><p>總覽是所方視角，這頁是心理師自己的：我的在案個案與其中高風險數、<strong>本週排程（含視訊連結）</strong>、本月與今年完成晤談、待補紀錄與待完成衡鑑報告、我的個案未讀訊息與待填量表、追蹤中危機事件與通報期限、本月開立費用。下半頁是專業資格進度條——<strong>年度督導時數、繼續教育總積分、特定三類合計與專業倫理個別下限</strong>，各自顯示已達標或尚差多少，以及執照更新倒數。</p></div>
   <div class="card"><h4>晤談提醒</h4><p>產生可直接複製的提醒訊息（範本可自訂，代入個案、心理師、日期星期、時間、取消時限）。填入<strong>webhook 網址</strong>後可由系統直接送出簡訊或 LINE，支援單筆與整批發送；<strong>每一則發送都留紀錄</strong>，成功、失敗與失敗原因可查。未設定通道時只產生文字供人工發送，不會把個資送出去。</p></div>
-  <div class="card"><h4>LINE 傳話與改期簽核<span class="tag">官方帳號</span></h4><p>個案在<strong>LINE 官方帳號</strong>傳「要改期／請假」，系統依關鍵字自動抓出他最近一筆有效預約，把原話<strong>轉到該心理師的 LINE 群組</strong>並回覆個案已收到；心理師直接在群組回覆，內容自動記入申請單。行政人員在「改期簽核」頁填入新時段按下簽核，系統<strong>檢查心理師與諮商室衝突後才真正改期</strong>，並同時把新時間送回個案的對話框與心理師群組。心理師未及回覆時，行政可用電話問完<strong>代錄回覆</strong>；憑證尚未申請前流程照常在系統內跑，只是不對外送訊息。每一則收送都留軌跡含失敗原因。</p></div>
+  <div class="card"><h4>對外預約頁<span class="tag">免登入</span></h4><p>公開網址 <code>/booking.html</code>：民眾選<strong>據點 → 主題 → 心理師與空檔</strong>後留下聯絡方式送出。全預約制實務上不會讓網路訪客直接把時段鎖走，因此系統<strong>不直接成立預約</strong>，而是產生一筆「線上預約」來電登記，由櫃檯電話確認初談需求與收費後才排定。對外只查得到「哪些時段還空著」，<strong>不含任何個案資料</strong>，並有 IP 流量限制；不想開放時可於系統設定整個關閉。多據點諮商所另有<strong>據點（分館）</strong>設定：諮商室歸屬據點、心理師可跨據點駐點，排程與預約清單皆可依據點篩選。</p></div>
+  <div class="card"><h4>LINE 傳話與改期簽核<span class="tag">官方帳號</span></h4><p>個案在<strong>LINE 官方帳號</strong>傳「要改期／請假」，系統依關鍵字自動抓出他最近一筆有效預約，把原話<strong>轉到該心理師的 LINE 群組</strong>並回覆個案已收到；心理師直接在群組回覆，內容自動記入申請單。行政人員在「改期簽核」頁填入新時段按下簽核，系統<strong>檢查心理師與諮商室衝突後才真正改期</strong>，並同時把新時間送回個案的對話框與心理師群組。心理師未及回覆時，行政可用電話問完<strong>代錄回覆</strong>；憑證尚未申請前流程照常在系統內跑，只是不對外送訊息。每一則收送都留軌跡含失敗原因。訊息一律以 <strong>Flex Message 卡片</strong>送出，群組裡一眼看得出是哪位個案的哪一筆申請。憑證直接在系統裡填、按一下即可<strong>驗證官方帳號與 webhook 設定</strong>；官方帳號被拉進群組後<strong>群組 ID 自動偵測</strong>，選心理師按一下就完成指派。</p></div>
 </div>
 
 <div class="grp">臨床作業</div>
@@ -225,6 +226,7 @@
   <b>通知</b>：可接自家簡訊／LINE webhook，未設定則產生訊息供人工發送。<b>部署</b>：nginx 反向代理。<br>
   <b>線上試用</b>：所內端 <a href="https://mental-hug.crownai.ink/">mental-hug.crownai.ink</a>　·
   個案端 <a href="https://mental-hug.crownai.ink/portal.html">mental-hug.crownai.ink/portal.html</a>　·
+  線上預約 <a href="https://mental-hug.crownai.ink/booking.html">mental-hug.crownai.ink/booking.html</a>　·
   本文件 <a href="https://mental-hug.crownai.ink/mental-hug-intro.pdf">mental-hug.crownai.ink/mental-hug-intro.pdf</a>
 </div>
 

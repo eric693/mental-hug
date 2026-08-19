@@ -1,0 +1,51 @@
+<!DOCTYPE html>
+<html lang="zh-Hant-TW">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>線上預約 — 擁抱心理</title>
+  <meta name="description" content="擁抱心理諮商所線上預約：選擇據點與心理師，查看可預約時段並送出預約申請。">
+  <link rel="stylesheet" href="/css/style.css">
+  <meta name="theme-color" content="#4e5556">
+  <style>
+    body { background: #faf5f3; }
+    .bk-wrap { max-width: 720px; margin: 0 auto; padding-bottom: 48px; }
+    .bk-head { background: linear-gradient(140deg, #f4ccc3, #4e5556); color: #fff; padding: 26px 18px 22px; }
+    .bk-head h1 { font-size: 22px; letter-spacing: 1px; }
+    .bk-head .sub { font-size: 14px; color: rgba(255,255,255,0.9); margin-top: 4px; }
+    .bk-head .tel { font-size: 13.5px; color: rgba(255,255,255,0.9); margin-top: 10px; }
+    .bk-body { padding: 14px; }
+    .step { background: #fff; border: 1px solid var(--border); border-radius: var(--radius); padding: 14px; margin-bottom: 12px; }
+    .step h2 { font-size: 15px; margin-bottom: 4px; }
+    .step .hint { font-size: 12.5px; color: var(--muted); margin-bottom: 10px; }
+    .pick { display: flex; flex-wrap: wrap; gap: 8px; }
+    .pick button {
+      border: 1px solid var(--border); background: #fff; border-radius: 999px; padding: 7px 14px;
+      font-size: 13.5px; cursor: pointer; color: var(--text);
+    }
+    .pick button.on { background: var(--primary); border-color: var(--primary); color: #fff; font-weight: 600; }
+    .cslr { border: 1px solid var(--border); border-radius: 10px; padding: 10px 12px; margin-bottom: 8px; }
+    .cslr .nm { font-size: 15px; font-weight: 600; }
+    .cslr .meta { font-size: 12.5px; color: var(--muted); margin-top: 2px; }
+    .slots { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+    .slots button { border: 1px solid var(--primary-light); background: var(--primary-light); color: var(--primary-dark);
+      border-radius: 8px; padding: 6px 11px; font-size: 13.5px; cursor: pointer; }
+    .slots button.on { background: var(--primary); color: #fff; }
+    .crisis { background: var(--danger-bg); color: var(--danger); border-radius: 10px; padding: 10px 12px;
+      font-size: 13px; line-height: 1.7; margin-bottom: 12px; }
+    .notice { background: var(--primary-light); border-radius: 10px; padding: 10px 12px; font-size: 13px;
+      line-height: 1.8; margin-bottom: 12px; }
+    .site-info { font-size: 12.5px; color: var(--muted); margin-top: 8px; line-height: 1.7; }
+    .done { text-align: center; padding: 34px 16px; }
+    .done .big { font-size: 19px; font-weight: 700; margin-bottom: 8px; }
+  </style>
+</head>
+<body>
+  <div id="app"></div>
+  <div id="toast"></div>
+  <script src="/js/api.js"></script>
+  <script src="/js/ui.js"></script>
+  <script src="/js/booking.js"></script>
+  <script>Booking.boot();</script>
+</body>
+</html>

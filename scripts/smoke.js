@@ -653,11 +653,131 @@ function startServer() {
     await admin.ok('PUT', '/api/settings', { line_channel_secret: '', line_channel_token: '' });
   });
 
+  await test('憑證可在設定頁直接填、留空不覆蓋、可清除', async () => {
+    await admin.ok('PUT', '/api/line/credentials', { line_channel_secret: 'sec1', line_channel_token: 'tok1' });
+    let st = await admin.ok('GET', '/api/line/status');
+    equal(st.enabled, true, '填完憑證應為已啟用');
+    assert(!st.secret_masked.includes('sec1'), '不應把完整 secret 回傳給前端');
+    // 留空＝不變更
+    await admin.ok('PUT', '/api/line/credentials', { line_channel_secret: '', line_channel_token: '', line_keywords: '改期,請假' });
+    st = await admin.ok('GET', '/api/line/status');
+    equal(st.enabled, true, '留空不應清掉憑證');
+    equal(st.keywords, '改期,請假', '關鍵字');
+    await admin.ok('PUT', '/api/line/credentials', { clear_secret: true, clear_token: true });
+    st = await admin.ok('GET', '/api/line/status');
+    equal(st.enabled, false, '清除後應停用');
+    await admin.fails('POST', '/api/line/verify', {}, 'token');
+  });
+  await test('群組 ID 自動偵測：傳過話但未指派的群組會被列出並可一鍵指派', async () => {
+    const crypto = require('crypto');
+    const secret = 'auto-group-secret';
+    await admin.ok('PUT', '/api/line/credentials', { line_channel_secret: secret, line_channel_token: 'tok2' });
+    const raw = JSON.stringify({ events: [{ type: 'join', replyToken: 'jt',
+      source: { type: 'group', groupId: 'Cnew-group-1' } }] });
+    const r = await fetch(BASE + '/line/webhook', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json',
+        'X-Line-Signature': crypto.createHmac('sha256', secret).update(raw).digest('base64') },
+      body: raw
+    });
+    equal(r.status, 200, 'webhook HTTP 狀態');
+    await new Promise(res => setTimeout(res, 300));
+    let st = await admin.ok('GET', '/api/line/status');
+    const g = st.unassigned_groups.find(x => x.source_id === 'Cnew-group-1');
+    assert(g, '被拉進群組應自動記下 groupId 並列為待指派');
+    await admin.ok('PUT', '/api/line/counselors/3/group', { line_group_id: 'Cnew-group-1' });
+    st = await admin.ok('GET', '/api/line/status');
+    assert(!st.unassigned_groups.some(x => x.source_id === 'Cnew-group-1'), '指派後不應再列為待指派');
+    equal(st.counselors.find(c => c.id === 3).line_group_id, 'Cnew-group-1', '指派結果');
+    await admin.ok('PUT', '/api/line/credentials', { clear_secret: true, clear_token: true });
+  });
+
+  await test('對外訊息以 Flex 泡泡送出，altText 保留純文字版', () => {
+    const line = require(path.join(ROOT, 'src', 'line.js'));
+    const bub = line.bubble({
+      title: '改期申請 #1', tone: 'warn',
+      fields: [line.fieldRow('個案', '王小明（C2026001）')],
+      body: '個案訊息：想改到下週', footer: '請在群組回覆'
+    });
+    equal(bub.type, 'bubble', 'Flex 類型');
+    equal(bub.header.contents[0].text, '改期申請 #1', '標題');
+    assert(bub.footer, '應有頁尾');
+    const msg = line.flexMessage('改期申請 #1\n個案：王小明', bub);
+    equal(msg.type, 'flex', '訊息類型');
+    assert(!msg.altText.includes('\n'), 'altText 不應含換行');
+    assert(msg.altText.length <= 400, 'altText 長度需符合 LINE 限制');
+    // 整包必須可序列化，欄位值為 undefined 會被 LINE 退件
+    assert(!JSON.stringify(msg).includes('undefined'), 'Flex 內容不應出現 undefined');
+  });
+
   await test('模組關閉後 API 一律 403', async () => {
     await admin.ok('PUT', '/api/settings', { disabled_modules: 'line' });
     await admin.fails('GET', '/api/reschedule-requests', undefined, '未啟用');
     await admin.ok('PUT', '/api/settings', { disabled_modules: '' });
     await admin.ok('GET', '/api/reschedule-requests');
+  });
+
+  // ---------------------------------------------------------------- 據點與對外預約
+  section('據點與對外預約頁');
+  let siteA;
+  await test('建立據點、指定諮商室與心理師駐點', async () => {
+    const r = await admin.ok('POST', '/api/sites', { name: '冒煙據點', short_name: '冒煙', phone: '02-0000-0000' });
+    siteA = r.id;
+    const rooms = await admin.ok('GET', '/api/rooms');
+    await admin.ok('PUT', `/api/rooms/${rooms[0].id}`, { site_id: siteA });
+    const after = await admin.ok('GET', '/api/rooms');
+    equal(after.find(x => x.id === rooms[0].id).site_id, siteA, '諮商室據點');
+    await admin.ok('PUT', '/api/counselors/2/sites', { site_ids: [siteA] });
+    const cs = await admin.ok('GET', '/api/counselor-sites');
+    assert(cs.find(u => u.id === 2).site_ids.includes(siteA), '心理師駐點');
+  });
+  await test('排定預約時據點跟著諮商室帶入，並可依據點篩選', async () => {
+    const rooms = await admin.ok('GET', '/api/rooms');
+    const room = rooms.find(r => r.site_id === siteA);
+    const target = addDays(monday, 56);
+    const a = await admin.ok('POST', '/api/appointments',
+      { client_id: clientId, counselor_id: 2, room_id: room.id, date: target, start_time: '09:00' });
+    const list = await admin.ok('GET', `/api/appointments?site_id=${siteA}`);
+    const row = list.find(x => x.id === a.id);
+    assert(row, '應能依據點篩選出這筆預約');
+    equal(row.site_name, '冒煙據點', '據點名稱');
+    const week = await admin.ok('GET', `/api/schedule/week?start=${target}&site_id=${siteA}`);
+    assert(week.appointments.some(x => x.id === a.id), '週檢視依據點篩選');
+    assert(week.sites.length >= 1, '週檢視應帶回據點清單');
+  });
+  await test('對外預約頁：可取得選項與空檔，且不外洩個案資料', async () => {
+    const o = await admin.ok('GET', '/api/public/booking/options');
+    equal(o.enabled, true, '預設開放線上預約');
+    assert(o.sites.length >= 1 && o.topics.length >= 1, '應帶回據點與主題');
+    const raw = JSON.stringify(o);
+    assert(!raw.includes('冒煙測試個案'), '選項不應包含任何個案資料');
+    const day = nextWeekday(1, 8);
+    const slots = await admin.ok('GET', `/api/public/booking/slots?date=${day}`);
+    assert(slots.counselors.length >= 1, '應有可預約心理師與空檔');
+    assert(!JSON.stringify(slots).includes('冒煙測試個案'), '空檔不應包含個案資料');
+    const past = await admin.ok('GET', '/api/public/booking/slots?date=1990-01-01');
+    equal(past.counselors.length, 0, '超出可預約範圍應回空');
+  });
+  await test('線上預約申請會進來電登記，缺聯絡方式會被擋', async () => {
+    await admin.fails('POST', '/api/public/booking/request', { name: '', phone: '0912345678' }, '姓名');
+    await admin.fails('POST', '/api/public/booking/request', { name: '網路訪客', phone: '12' }, '電話');
+    const day = nextWeekday(1, 8);
+    const r = await admin.ok('POST', '/api/public/booking/request', {
+      name: '網路訪客', phone: '0955000111', topic: '情緒困擾（憂鬱、焦慮）',
+      site_id: siteA, counselor_id: 2, date: day, start_time: '09:00', first_time: true, note: '想約晚上'
+    });
+    assert(r.ok, '應建立成功');
+    const intakes = await admin.ok('GET', '/api/intakes?status=new');
+    const hit = (intakes.rows || intakes).find(x => x.name === '網路訪客');
+    assert(hit, '應出現在來電登記');
+    equal(hit.source, '線上預約', '來源');
+    assert(String(hit.preferred_time).includes(day), '希望時段應帶入所選時間');
+  });
+  await test('關閉線上預約後公開端點一律拒絕', async () => {
+    await admin.ok('PUT', '/api/settings', { public_booking_enabled: '0' });
+    await admin.fails('GET', '/api/public/booking/slots?date=2030-01-01', undefined, '未開放');
+    await admin.fails('POST', '/api/public/booking/request', { name: 'x', phone: '0912345678' }, '未開放');
+    await admin.ok('PUT', '/api/settings', { public_booking_enabled: '1' });
   });
 
   // ---------------------------------------------------------------- 附件
