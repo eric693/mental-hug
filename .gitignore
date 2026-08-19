@@ -1,0 +1,6 @@
+# 正式資料庫、備份與個案附件一律不進版控：
+# 內含個案與心理師的個人資料，這個 repo 是公開的。
+data/
+uploads/
+node_modules/
+docs/brochure/build.html
