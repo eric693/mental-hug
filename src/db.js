@@ -314,6 +314,68 @@ ensureColumns('session_notes', {
   record_type: "TEXT NOT NULL DEFAULT 'individual'"
 });
 
+// ---- 分帳引擎（M6）----
+// 一條規則可以改很多次，但「已經拆過的帳不能被今天改的規則動到」，
+// 所以規則本身只是個殼，實際條件與比例放在版本裡；每一筆拆帳都鎖住當時的版本 id。
+db.exec(`CREATE TABLE IF NOT EXISTS split_rules (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  name TEXT NOT NULL,
+  note TEXT NOT NULL DEFAULT '',
+  active INTEGER NOT NULL DEFAULT 1,
+  created_at TEXT NOT NULL DEFAULT (datetime('now','localtime'))
+);
+CREATE TABLE IF NOT EXISTS split_rule_versions (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  rule_id INTEGER NOT NULL REFERENCES split_rules(id) ON DELETE CASCADE,
+  version INTEGER NOT NULL DEFAULT 1,
+  -- 適用條件（留空＝不限）
+  counselor_id INTEGER REFERENCES users(id),
+  project_id INTEGER,
+  site_id INTEGER REFERENCES sites(id),
+  appt_type TEXT NOT NULL DEFAULT '',        -- intake／individual／couple／family／assessment…
+  item_type TEXT NOT NULL DEFAULT 'session', -- session 晤談／report 書表製作／room 場地費／other
+  designated TEXT NOT NULL DEFAULT '',       -- yes 指名／no 派案／空＝不限
+  effective_from TEXT NOT NULL DEFAULT '',
+  effective_to TEXT NOT NULL DEFAULT '',
+  -- 拆分方式：先扣固定額，剩餘依比例；比例以心理師端為準，機構端 = 100 - 心理師
+  counselor_pct REAL NOT NULL DEFAULT 0,
+  fixed_counselor INTEGER NOT NULL DEFAULT 0,
+  fixed_center INTEGER NOT NULL DEFAULT 0,
+  priority INTEGER NOT NULL DEFAULT 100,     -- 數字小者優先
+  created_by INTEGER REFERENCES users(id),
+  created_at TEXT NOT NULL DEFAULT (datetime('now','localtime')),
+  UNIQUE(rule_id, version)
+);
+CREATE INDEX IF NOT EXISTS idx_srv_rule ON split_rule_versions(rule_id, version);
+
+-- 實際拆帳結果：一張收費單一筆，鎖住當時套用的規則版本
+CREATE TABLE IF NOT EXISTS invoice_splits (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  invoice_id INTEGER NOT NULL REFERENCES invoices(id) ON DELETE CASCADE,
+  appointment_id INTEGER REFERENCES appointments(id) ON DELETE SET NULL,
+  counselor_id INTEGER REFERENCES users(id),
+  rule_id INTEGER REFERENCES split_rules(id),
+  rule_version_id INTEGER REFERENCES split_rule_versions(id),
+  rule_label TEXT NOT NULL DEFAULT '',       -- 當時的規則名稱與版本，規則改名也看得懂
+  month TEXT NOT NULL DEFAULT '',
+  amount INTEGER NOT NULL DEFAULT 0,         -- 拆分基礎（收費單金額）
+  counselor_amount INTEGER NOT NULL DEFAULT 0,
+  center_amount INTEGER NOT NULL DEFAULT 0,
+  minutes INTEGER NOT NULL DEFAULT 0,
+  note TEXT NOT NULL DEFAULT '',
+  created_at TEXT NOT NULL DEFAULT (datetime('now','localtime')),
+  UNIQUE(invoice_id)
+);
+CREATE INDEX IF NOT EXISTS idx_split_month ON invoice_splits(month, counselor_id);`);
+ensureColumns('appointments', {
+  // 指名預約：分帳比例與「指名預約比例」指標都要用
+  designated: 'INTEGER NOT NULL DEFAULT 0'
+});
+ensureColumns('users', {
+  contract_type: "TEXT NOT NULL DEFAULT ''",   // 合約類型：全職／兼職／合作
+  default_rule_id: 'INTEGER'                   // 預設分帳規則
+});
+
 // ---- 據點（分館）----
 // 多據點諮商所：諮商室屬於某個據點，心理師可跨據點看診（多對多），
 // 預約的據點由諮商室決定，視訊晤談則沿用心理師的主要據點。

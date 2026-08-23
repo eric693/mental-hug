@@ -909,6 +909,7 @@ App.page('users', {
         ${UI.input('license_no', '證書字號', { value: u ? u.license_no : '' })}
         ${UI.input('license_expiry', '執業執照更新日', { type: 'date', value: u ? u.license_expiry : '' })}
         ${UI.input('specialty', '專長', { value: u ? u.specialty : '', full: true })}
+        ${UI.inputList('contract_type', '合約類型', ['全職', '兼職', '合作（拆帳）', '實習'], { value: u ? (u.contract_type || '') : '' })}
         ${UI.input('meeting_room_url', '固定視訊會議室連結', {
     value: u ? (u.meeting_room_url || '') : '', full: true,
     placeholder: 'https://meet.google.com/xxx-xxxx-xxx（排視訊晤談時自動帶入）'

@@ -427,3 +427,7 @@ table.list tr:hover td { background: #f8fbfb; }
 .inq-foot { display: flex; align-items: center; gap: 8px; margin-top: 10px; flex-wrap: wrap; }
 .inq-foot .spacer { flex: 1; }
 .inq-status { font-size: 12.5px; color: var(--muted); }
+
+/* 分帳規則卡片 */
+.rule-cur { background: var(--primary-light); border-radius: 8px; padding: 9px 11px; margin-top: 8px;
+  font-size: 13.5px; line-height: 1.7; }

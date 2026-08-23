@@ -23,6 +23,7 @@ async function apptDialog(appt, onDone, defaults) {
       ${UI.select('room_id', '諮商室', App.roomOptions(), { value: a.room_id || '' })}
       ${UI.input('fee', '費用', { type: 'number', value: a.fee !== undefined ? a.fee : (App.meta.default_fee || 2000) })}
       ${UI.select('package_id', '扣抵方案', [['', '不扣抵（單次收費）']].concat(packages.map(p => [p.id, `${p.name}（剩 ${p.remaining} 次）`])), { value: a.package_id || '' })}
+      ${UI.checkbox('designated', '個案指名這位心理師（影響分帳規則與指名預約比例）', !!a.designated)}
       <div class="form-row full" id="mu-row" style="${a.mode === 'online' ? '' : 'display:none'}">
         <label>視訊連結</label>
         <input name="meeting_url" value="${UI.esc(a.meeting_url || '')}" placeholder="https://meet.google.com/xxx-xxxx-xxx">

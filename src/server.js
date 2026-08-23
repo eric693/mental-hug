@@ -110,6 +110,8 @@ app.use('/api', require('./routes/ai'));
 app.use('/api', require('./routes/nonclient'));
 // LINE 溝通儀表板：個案訊息的多層次人工審核（AI 初篩 → 行政初審 → 心理師擬稿 → 行政複審 → 送出）
 app.use('/api', require('./routes/inquiries'));
+// 分帳引擎：規則版本化、模擬器、拆帳與人員月結
+app.use('/api', require('./routes/split'));
 
 // 手動觸發備份與附件同步：換機、要立刻帶走資料，或剛上傳完重要附件時不必等排程。
 // 僅管理者可用，並回報備份檔與同步的附件數，方便確認真的做了。

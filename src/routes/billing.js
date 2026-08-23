@@ -2,6 +2,7 @@ const express = require('express');
 const { db, audit, today, nowStamp, getSetting, listSetting, listQuery } = require('../db');
 const { requireStaff } = require('../auth');
 const { sendNotification } = require('../notify');
+const split = require('../split');
 
 const router = express.Router();
 
@@ -77,6 +78,12 @@ router.post('/invoices/:id/pay', requireStaff('billing'), (req, res) => {
   const { method = '現金' } = req.body || {};
   db.prepare("UPDATE invoices SET status = 'paid', method = ?, paid_at = ?, receipt_no = ? WHERE id = ?")
     .run(method, nowStamp(), i.receipt_no || nextReceiptNo(), i.id);
+  // 收款當下就把帳拆好：拖到月底才拆，規則早就改過好幾版了。
+  // 拆不出來（沒有適用規則）不擋收款，但會留在「未拆帳」清單等處理。
+  const sp = split.applySplit({ ...i, status: 'paid' });
+  if (!sp.ok) {
+    audit('staff', req.user.id, req.user.name, '收款後未能自動拆帳', String(i.id), { reason: sp.reason });
+  }
   audit('staff', req.user.id, req.user.name, '收款', String(i.client_id), { id: i.id, amount: i.amount });
   res.json({ ok: true });
 });

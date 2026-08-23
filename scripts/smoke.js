@@ -1036,6 +1036,91 @@ function startServer() {
     await admin.fails('POST', '/api/nonclient-services/migrate', { client_id: clientId }, '對象單位');
   });
 
+  // ---------------------------------------------------------------- 分帳引擎
+  section('分帳引擎（規則版本化、模擬器、月結）');
+  let ruleId, defaultRuleId;
+  await test('沒有規則時拆不出來，且明確說明原因', async () => {
+    const r = await admin.ok('POST', '/api/split-rules/simulate',
+      { amount: 2000, counselor_id: 2, appt_type: 'individual' });
+    equal(r.matched, false, '無規則時不應硬湊');
+    assert(r.message.includes('找不到'), '應說明原因');
+  });
+  await test('建立規則與條件比對：指名與派案不同比、優先序決定勝出', async () => {
+    // 預設規則：不限條件，五五分
+    const base = await admin.ok('POST', '/api/split-rules',
+      { name: '預設 50:50', counselor_pct: 50, priority: 900 });
+    defaultRuleId = base.id;
+    // 指名加成：優先序較小，應勝出
+    const named = await admin.ok('POST', '/api/split-rules',
+      { name: '指名 60:40', counselor_pct: 60, designated: 'yes', priority: 100 });
+    ruleId = named.id;
+    const a1 = await admin.ok('POST', '/api/split-rules/simulate',
+      { amount: 2000, counselor_id: 2, appt_type: 'individual', designated: true });
+    equal(a1.counselor_amount, 1200, '指名應套 60%');
+    assert(a1.rule_label.includes('指名'), '應套指名規則');
+    const a2 = await admin.ok('POST', '/api/split-rules/simulate',
+      { amount: 2000, counselor_id: 2, appt_type: 'individual', designated: false });
+    equal(a2.counselor_amount, 1000, '派案應退回預設 50%');
+  });
+  await test('固定額先扣再抽成，且兩邊相加等於原金額', async () => {
+    await admin.ok('POST', `/api/split-rules/${ruleId}/versions`,
+      { counselor_pct: 60, designated: 'yes', priority: 100, fixed_center: 300 });
+    const r = await admin.ok('POST', '/api/split-rules/simulate',
+      { amount: 2001, counselor_id: 2, appt_type: 'individual', designated: true });
+    equal(r.counselor_amount + r.center_amount, 2001, '拆分後總額必須守恆');
+    equal(r.counselor_amount, Math.round((2001 - 300) * 0.6), '固定額應先扣除再抽成');
+    assert(r.rule_label.includes('v2'), '應套用最新版本');
+  });
+  await test('收款自動拆帳，並鎖住當時的規則版本', async () => {
+    const target = addDays(monday, 77);
+    const a = await admin.ok('POST', '/api/appointments',
+      { client_id: clientId, counselor_id: 2, date: target, start_time: '10:00', fee: 2000, designated: 1 });
+    await admin.ok('POST', `/api/appointments/${a.id}/status`, { status: 'done' });
+    const inv = (await admin.ok('GET', `/api/invoices?client_id=${clientId}&status=unpaid`))
+      .rows.find(x => x.appointment_id === a.id);
+    assert(inv, '完成晤談應開單');
+    await admin.ok('POST', `/api/invoices/${inv.id}/pay`, { method: '現金' });
+    const splits = await admin.ok('GET', `/api/splits?month=${target.slice(0, 7)}`);
+    const row = splits.rows.find(x => x.invoice_id === inv.id);
+    assert(row, '收款後應自動拆帳');
+    equal(row.counselor_amount + row.center_amount, row.amount, '拆分守恆');
+    const lockedVersion = row.rule_version_id;
+    // 規則改版後，歷史拆帳不應變動
+    // 改版時未指定的欄位沿用上一版，所以固定額要明確歸零
+    await admin.ok('POST', `/api/split-rules/${ruleId}/versions`,
+      { counselor_pct: 30, designated: 'yes', priority: 100, fixed_center: 0 });
+    const after = (await admin.ok('GET', `/api/splits?month=${target.slice(0, 7)}`))
+      .rows.find(x => x.invoice_id === inv.id);
+    equal(after.rule_version_id, lockedVersion, '歷史拆帳應鎖在原版本');
+    equal(after.counselor_amount, row.counselor_amount, '歷史金額不應被新版規則改動');
+    // 但新的模擬會套新版
+    const sim = await admin.ok('POST', '/api/split-rules/simulate',
+      { amount: 1000, counselor_id: 2, appt_type: 'individual', designated: true });
+    equal(sim.counselor_amount, 300, '新版比例應立即生效於新交易');
+  });
+  await test('月結表：分人彙總次數、時數與金額，並列出未拆帳', async () => {
+    const month = addDays(monday, 77).slice(0, 7);
+    const d = await admin.ok('GET', '/api/splits/settlement?month=' + month);
+    assert(d.groups.length >= 1, '應有分人彙總');
+    const g = d.groups[0];
+    equal(g.counselor_amount + g.center_amount, g.amount, '每人合計守恆');
+    equal(g.rows.length, g.sessions, '筆數一致');
+    assert(Array.isArray(d.unsplit), '應回報未拆帳清單');
+    const rc = await admin.ok('POST', '/api/splits/recalculate', { month });
+    assert(typeof rc.done === 'number', '重算應回報筆數');
+  });
+  await test('用過的規則不可刪除，只能停用', async () => {
+    const out = await admin.ok('DELETE', `/api/split-rules/${ruleId}`);
+    equal(out.disabled, true, '已用於拆帳的規則應改為停用');
+    const empty = await admin.ok('POST', '/api/split-rules', { name: '沒用過的規則', counselor_pct: 40 });
+    equal((await admin.ok('DELETE', `/api/split-rules/${empty.id}`)).disabled, false, '沒用過的可真的刪除');
+    // 停用後預設規則接手
+    const sim = await admin.ok('POST', '/api/split-rules/simulate',
+      { amount: 2000, counselor_id: 2, appt_type: 'individual', designated: true });
+    equal(sim.counselor_amount, 1000, '停用指名規則後應回落到預設 50%');
+    assert(defaultRuleId, '');
+  });
+
   // ---------------------------------------------------------------- 溝通儀表板
   section('個案訊息多層次人工審核');
   let inqId;

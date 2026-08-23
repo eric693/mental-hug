@@ -134,11 +134,12 @@ router.post('/appointments', requireStaff('schedule'), (req, res) => {
     ? Number(b.fee)
     : Number(getSetting(b.type === 'intake' ? 'intake_fee' : 'default_fee', '2000'));
   const info = db.prepare(`INSERT INTO appointments
-    (client_id, counselor_id, room_id, date, start_time, end_time, type, mode, status, fee, package_id, source, note, meeting_url, site_id, created_by)
-    VALUES (?,?,?,?,?,?,?,?,'booked',?,?,?,?,?,?,?)`).run(
+    (client_id, counselor_id, room_id, date, start_time, end_time, type, mode, status, fee, package_id, source, note, meeting_url, site_id, designated, created_by)
+    VALUES (?,?,?,?,?,?,?,?,'booked',?,?,?,?,?,?,?,?)`).run(
     client.id, Number(b.counselor_id), Number(b.room_id) || null, b.date, b.start_time, end_time,
     b.type || 'individual', b.mode || 'onsite', fee, Number(b.package_id) || null,
-    b.source || 'staff', b.note || '', meeting_url, siteOfRoom(b.room_id, b.counselor_id), req.user.id);
+    b.source || 'staff', b.note || '', meeting_url, siteOfRoom(b.room_id, b.counselor_id),
+    b.designated ? 1 : 0, req.user.id);
   audit('staff', req.user.id, req.user.name, '新增預約', client.code, { date: b.date, time: b.start_time });
   res.json({ id: info.lastInsertRowid });
 });
@@ -163,9 +164,10 @@ router.put('/appointments/:id', requireStaff('schedule'), (req, res) => {
     meeting_url = '';
   }
   db.prepare(`UPDATE appointments SET counselor_id = ?, room_id = ?, date = ?, start_time = ?, end_time = ?,
-    type = ?, mode = ?, fee = ?, note = ?, meeting_url = ?, site_id = ? WHERE id = ?`).run(
+    type = ?, mode = ?, fee = ?, note = ?, meeting_url = ?, site_id = ?, designated = ? WHERE id = ?`).run(
     Number(b.counselor_id), Number(b.room_id) || null, b.date, b.start_time, b.end_time,
-    b.type, b.mode, Number(b.fee) || 0, b.note || '', meeting_url, siteOfRoom(b.room_id, b.counselor_id), a.id);
+    b.type, b.mode, Number(b.fee) || 0, b.note || '', meeting_url, siteOfRoom(b.room_id, b.counselor_id),
+    b.designated ? 1 : 0, a.id);
   audit('staff', req.user.id, req.user.name, '修改預約', String(a.id));
   res.json({ ok: true });
 });
