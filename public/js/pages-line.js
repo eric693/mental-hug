@@ -228,8 +228,13 @@ App.page('line', {
   sub: '官方帳號憑證、心理師群組與訊息軌跡',
   module: 'line',
   async render(el) {
+    let evPage = 1, evQ = '';
     const draw = async () => {
-      const [st, events] = await Promise.all([GET('/line/status'), GET('/line/events')]);
+      const [st, ev] = await Promise.all([
+        GET('/line/status'),
+        GET(`/line/events?q=${encodeURIComponent(evQ)}&page=${evPage}&size=50`)
+      ]);
+      const events = ev.rows;
       const origin = location.origin;
       el.innerHTML = `
       <div class="stat-grid">
@@ -351,7 +356,10 @@ App.page('line', {
         <div style="font-size:12.5px;color:var(--muted)">憑證未填之前，流程仍可在系統內完整跑（申請、代錄回覆、簽核改期），只是不會對外送訊息。</div>
       </div>
 
-      <div class="card"><h3>傳話軌跡（最近 200 筆）</h3>
+      <div class="card"><h3>傳話軌跡</h3>
+        <div class="toolbar" style="padding:0 0 10px">
+          <input id="evq" class="search-box" placeholder="搜尋訊息內容／群組 ID／個案" value="${UI.esc(evQ)}">
+          <div class="spacer"></div></div>
         ${UI.table(['時間', '方向', '對象', '個案／心理師', '內容', '狀態'], events.map(e => `<tr>
           <td style="white-space:nowrap">${UI.esc(e.created_at.slice(5, 16))}</td>
           <td>${e.direction === 'in' ? '收到' : '送出'}</td>
@@ -362,7 +370,14 @@ App.page('line', {
           <td>${e.status === 'ok' ? UI.tag('正常', 'ok')
     : e.status === 'skipped' ? UI.tag('未送出（' + e.error + '）', 'warn')
       : UI.tag('失敗：' + e.error, 'danger')}</td></tr>`), '尚無傳話紀錄')}
+        ${UI.pager(ev, p => { evPage = p; draw(); })}
       </div>`;
+
+      const evq = el.querySelector('#evq');
+      evq.oninput = () => {
+        clearTimeout(evq._t);
+        evq._t = setTimeout(() => { evQ = evq.value.trim(); evPage = 1; draw(); }, 300);
+      };
 
       const val = name => el.querySelector(`[name=${name}]`).value.trim();
       const out = el.querySelector('#vout');

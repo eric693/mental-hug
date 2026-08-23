@@ -401,3 +401,10 @@ table.list tr:hover td { background: #f8fbfb; }
   }
   .print-doc { position: relative; z-index: 1; }
 }
+
+/* ---- 分頁與搜尋 ---- */
+.pager { display: flex; align-items: center; gap: 8px; padding: 10px 2px 2px; flex-wrap: wrap; }
+.pager .pg-info { font-size: 12.5px; color: var(--muted); }
+.pager .spacer { flex: 1; }
+.pager input.pg-jump { padding: 4px 6px; border: 1px solid var(--border); border-radius: 6px; font-size: 13px; text-align: center; }
+.search-box { min-width: 200px; }

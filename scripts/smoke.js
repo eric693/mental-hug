@@ -63,6 +63,10 @@ function equal(actual, expected, msg) {
 }
 
 // ---- HTTP 工具（各自帶 cookie，模擬不同登入身分）----
+// 直接用 fetch 驗標頭時要帶 cookie，這裡讓 session 物件把 cookie 暴露出來
+let _adminCookie = '';
+function adminCookie() { return _adminCookie; }
+
 function session() {
   let cookie = '';
   const call = async (method, url, body, opts = {}) => {
@@ -74,7 +78,7 @@ function session() {
     }
     const res = await fetch(BASE + url, { method, headers, body: payload });
     const set = res.headers.get('set-cookie');
-    if (set) cookie = set.split(';')[0];
+    if (set) { cookie = set.split(';')[0]; if (url === '/api/login' && body && body.username === 'admin') _adminCookie = cookie; }
     const text = await res.text();
     let data = text;
     if ((res.headers.get('content-type') || '').includes('application/json')) {
@@ -605,7 +609,7 @@ function startServer() {
     assert(r, '應有一筆待審核轉達');
     equal(r.status, 'new', '未經審核不應轉達');
     const ev = await admin.ok('GET', '/api/line/events');
-    assert(!ev.some(e => e.request_id === r.id && e.source_type === 'group'),
+    assert(!ev.rows.some(e => e.request_id === r.id && e.source_type === 'group'),
       '未審核前不應有送往群組的紀錄');
     // 放行並修訂文字
     const out = await admin.ok('POST', `/api/reschedule-requests/${r.id}/relay`, { relay_text: '個案希望改期（櫃檯已確認）' });
@@ -681,7 +685,7 @@ function startServer() {
   });
   await test('傳話軌跡與綁定狀態可查', async () => {
     const ev = await admin.ok('GET', '/api/line/events');
-    assert(ev.length >= 1, '應有傳話紀錄');
+    assert(ev.rows.length >= 1, '應有傳話紀錄');
     const st = await admin.ok('GET', '/api/line/status');
     equal(st.enabled, false, '未設憑證應為未啟用');
     await admin.ok('PUT', '/api/line/counselors/2/group', { line_group_id: 'Cgroup-test' });
@@ -1080,6 +1084,55 @@ function startServer() {
     assert(!names.includes('counselor_output'), '行政沒有報表模組，不該有心理師產出工具');
   });
 
+  // ---------------------------------------------------------------- 搜尋與分頁
+  section('清單搜尋、篩選與分頁');
+  await test('個案清單：分頁標頭正確、搜尋可命中', async () => {
+    const r1 = await fetch(BASE + '/api/clients?page=1&size=2', { headers: { Cookie: adminCookie() } });
+    equal(r1.status, 200, 'HTTP');
+    const total = Number(r1.headers.get('X-Total-Count'));
+    const rows = await r1.json();
+    assert(total >= rows.length, '總數應大於等於本頁筆數');
+    assert(rows.length <= 2, '每頁筆數應受 size 限制');
+    equal(r1.headers.get('X-Page'), '1', '頁碼標頭');
+    // 第二頁不應與第一頁重複
+    const r2 = await fetch(BASE + '/api/clients?page=2&size=2', { headers: { Cookie: adminCookie() } });
+    const rows2 = await r2.json();
+    if (rows2.length) assert(rows2[0].id !== rows[0].id, '第二頁不應重複第一頁的資料');
+    // 搜尋
+    const s1 = await admin.ok('GET', '/api/clients?q=冒煙測試個案');
+    assert(s1.length >= 1 && s1.every(c => c.name.includes('冒煙') || c.code.includes('冒煙')), '搜尋結果應命中');
+    const s0 = await admin.ok('GET', '/api/clients?q=不可能存在的關鍵字zzz');
+    equal(s0.length, 0, '查無資料應回空陣列');
+  });
+  await test('收費單：搜尋、付款人別篩選與分頁', async () => {
+    const d = await admin.ok('GET', '/api/invoices?status=&page=1&size=2');
+    assert(typeof d.total_count === 'number' && d.pages >= 1, '應回傳總數與頁數');
+    assert(d.rows.length <= 2, '分頁大小');
+    const q = await admin.ok('GET', '/api/invoices?status=&q=冒煙測試個案');
+    assert(q.rows.every(r => r.client_name.includes('冒煙')), '搜尋應命中個案姓名');
+  });
+  await test('稽核軌跡：搜尋、動作篩選與分頁', async () => {
+    const d = await admin.ok('GET', '/api/audit-logs?page=1&size=5');
+    assert(d.rows.length <= 5 && d.total >= 1, '分頁結構');
+    const acts = await admin.ok('GET', '/api/audit-logs?action=批次列印&size=50');
+    assert(acts.rows.every(r => r.action.includes('批次列印')), '動作篩選');
+    await lin.fails('GET', '/api/audit-logs', undefined, '管理者');
+  });
+  await test('傳話軌跡與列印批次可搜尋分頁', async () => {
+    const ev = await admin.ok('GET', '/api/line/events?page=1&size=5');
+    assert(Array.isArray(ev.rows) && ev.pages >= 1, '傳話軌跡分頁結構');
+    const pb = await admin.ok('GET', '/api/print-batches?page=1&size=5&purpose=督考');
+    assert(pb.rows.every(r => r.purpose === '督考'), '用途篩選');
+  });
+  await test('非個案服務可搜尋分頁', async () => {
+    const r = await lin.ok('POST', '/api/nonclient-services',
+      { date: monday, org_name: '搜尋測試單位', topic: '壓力管理' });
+    const hit = await lin.ok('GET', '/api/nonclient-services?q=搜尋測試&page=1&size=10');
+    assert(hit.rows.some(x => x.id === r.id), '搜尋應命中');
+    assert(hit.pages >= 1 && typeof hit.total === 'number', '分頁結構');
+    await lin.ok('DELETE', `/api/nonclient-services/${r.id}`);
+  });
+
   // ---------------------------------------------------------------- 附件
   section('附件上傳與下載');
   let pngId, pdfId;
@@ -1191,7 +1244,7 @@ function startServer() {
     }
   });
   await test('調閱紀錄寫入稽核軌跡', async () => {
-    const rows = await admin.ok('GET', '/api/audit-logs');
+    const rows = (await admin.ok('GET', '/api/audit-logs?size=500')).rows;
     assert(rows.some(l => String(l.action).includes('調閱')), '應有調閱紀錄的稽核');
     assert(rows.some(l => String(l.action).includes('安全計畫')), '應有安全計畫相關稽核');
   });

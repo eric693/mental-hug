@@ -46,7 +46,9 @@ App.page('nonclient', {
       const q = new URLSearchParams({
         from: el.querySelector('#from').value,
         to: el.querySelector('#to').value,
-        type: el.querySelector('#type').value
+        type: el.querySelector('#type').value,
+        q: el.querySelector('#ncq').value.trim(),
+        page, size: 50
       });
       const d = await GET('/nonclient-services?' + q.toString());
       el.querySelector('#body').innerHTML = `
@@ -70,6 +72,7 @@ App.page('nonclient', {
             <td style="white-space:nowrap">
               <button class="btn tiny secondary" data-e="${r.id}">編輯</button>
               <button class="btn tiny danger" data-d="${r.id}">刪除</button></td></tr>`), '此期間沒有非個案服務紀錄')}
+          ${UI.pager(d, p => { page = p; draw(); })}
         </div>`;
       el.querySelectorAll('[data-e]').forEach(b => {
         b.onclick = () => nonclientDialog(d.rows.find(x => x.id === Number(b.dataset.e)), draw);
@@ -83,7 +86,9 @@ App.page('nonclient', {
         };
       });
     };
+    let page = 1;
     el.innerHTML = `<div class="toolbar" style="flex-wrap:wrap;gap:8px">
+        <input id="ncq" class="search-box" placeholder="搜尋單位／主題／地點／人員">
         <input type="date" id="from" value="${UI.today().slice(0, 8)}01">
         <input type="date" id="to" value="${UI.today()}">
         <select id="type"><option value="">全部類型</option>
@@ -92,9 +97,12 @@ App.page('nonclient', {
         ${App.me.role === 'admin' ? '<button class="btn secondary" id="migrate">歷史虛擬個案重新標記</button>' : ''}
         <button class="btn" id="add">新增紀錄</button></div>
       <div id="body"></div>`;
-    el.querySelector('#from').onchange = draw;
-    el.querySelector('#to').onchange = draw;
-    el.querySelector('#type').onchange = draw;
+    const reset = () => { page = 1; draw(); };
+    el.querySelector('#from').onchange = reset;
+    el.querySelector('#to').onchange = reset;
+    el.querySelector('#type').onchange = reset;
+    const ncq = el.querySelector('#ncq');
+    ncq.oninput = () => { clearTimeout(ncq._t); ncq._t = setTimeout(reset, 300); };
     el.querySelector('#add').onclick = () => nonclientDialog(null, draw);
 
     const mig = el.querySelector('#migrate');
@@ -134,8 +142,15 @@ App.page('print-batches', {
   sub: '批次列印屬特種個資大量匯出，每一批的用途、範圍與操作者都留存且不可修改',
   module: 'notes',
   async render(el) {
-    const d = await GET('/print-batches');
-    el.innerHTML = `
+    let page = 1;
+    const draw = async () => {
+      const q = new URLSearchParams({
+        q: (el.querySelector('#pbq') || {}).value || '',
+        purpose: (el.querySelector('#pbp') || {}).value || '',
+        page, size: 50
+      });
+      const d = await GET('/print-batches?' + q.toString());
+      el.querySelector('#pb-body').innerHTML = `
       ${d.anomalies.length ? `<div class="notice warn" style="margin-bottom:12px">
         <strong>您目前的列印行為觸發了下列提醒</strong><br>${d.anomalies.map(UI.esc).join('<br>')}</div>` : ''}
       <div class="card">
@@ -154,6 +169,19 @@ App.page('print-batches', {
         <div style="font-size:12.5px;color:var(--muted);margin-top:8px">
           異常判定門檻：單人單日超過 ${d.daily_limit} 筆、於所內上班時段以外列印、
           或一小時內執行三次以上批次（皆可於系統設定調整）。此頁只能查詢，沒有修改或刪除的功能。</div>
+        ${UI.pager(d, p => { page = p; draw(); })}
       </div>`;
+    };
+    el.innerHTML = `<div class="toolbar" style="flex-wrap:wrap;gap:8px">
+        <input id="pbq" class="search-box" placeholder="搜尋批次編號／操作者／用途">
+        <select id="pbp"><option value="">全部用途</option>
+          ${['督考', '司法調閱', '個案申請', '內部歸檔', '其他'].map(p => `<option value="${p}">${p}</option>`).join('')}</select>
+        <div class="spacer"></div></div>
+      <div id="pb-body"></div>`;
+    const reset = () => { page = 1; draw(); };
+    el.querySelector('#pbp').onchange = reset;
+    const pbq = el.querySelector('#pbq');
+    pbq.oninput = () => { clearTimeout(pbq._t); pbq._t = setTimeout(reset, 300); };
+    await draw();
   }
 });

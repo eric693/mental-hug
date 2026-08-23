@@ -1,5 +1,5 @@
 const express = require('express');
-const { db, audit, today, getSetting, nowStamp } = require('../db');
+const { db, audit, today, getSetting, nowStamp, listQuery } = require('../db');
 const { requireStaff } = require('../auth');
 
 const router = express.Router();
@@ -33,14 +33,18 @@ router.get('/nonclient-services', requireStaff('notes'), (req, res) => {
   if (to) { where.push('n.date <= ?'); args.push(to); }
   if (type) { where.push('n.record_type = ?'); args.push(type); }
   if (user_id) { where.push('n.user_id = ?'); args.push(Number(user_id)); }
-  const rows = db.prepare(`SELECT n.*, u.name AS user_name, s.name AS site_name
-    FROM nonclient_services n
-    LEFT JOIN users u ON u.id = n.user_id
-    LEFT JOIN sites s ON s.id = n.site_id
-    ${where.length ? 'WHERE ' + where.join(' AND ') : ''}
-    ORDER BY n.date DESC, n.id DESC LIMIT 300`).all(...args);
+  const page = listQuery({
+    select: 'n.*, u.name AS user_name, s.name AS site_name',
+    from: `nonclient_services n LEFT JOIN users u ON u.id = n.user_id LEFT JOIN sites s ON s.id = n.site_id`,
+    where, args,
+    search: String(req.query.q || ''),
+    searchFields: ['n.org_name', 'n.topic', 'n.location', 'u.name'],
+    order: 'n.date DESC, n.id DESC',
+    page: req.query.page, size: Number(req.query.size) || 50, maxSize: 300
+  });
+  const rows = page.rows;
   res.json({
-    rows,
+    rows, total: page.total, page: page.page, size: page.size, pages: page.pages,
     types: TYPES,
     // 這些數字刻意與個案統計分開呈現，避免又被混在一起看
     summary: {

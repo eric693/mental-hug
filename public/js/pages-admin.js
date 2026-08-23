@@ -387,10 +387,17 @@ App.page('billing', {
   sub: '晤談完成後自動產生收費單；未到依設定比例計費',
   module: 'billing',
   async render(el) {
+    let page = 1;
     const draw = async () => {
-      const st = el.querySelector('#st').value;
-      const from = el.querySelector('#from').value, to = el.querySelector('#to').value;
-      const d = await GET(`/invoices?status=${st}&from=${from}&to=${to}`);
+      const q = new URLSearchParams({
+        status: el.querySelector('#st').value,
+        from: el.querySelector('#from').value,
+        to: el.querySelector('#to').value,
+        payer: el.querySelector('#payer').value,
+        q: el.querySelector('#iq').value.trim(),
+        page, size: 50
+      });
+      const d = await GET('/invoices?' + q.toString());
       el.querySelector('#list').innerHTML = `
         <div class="stat-grid">
           <div class="stat"><div class="num warn">${UI.fmtMoney(d.total_unpaid)}</div><div class="label">未收款</div></div>
@@ -413,7 +420,8 @@ App.page('billing', {
             <button class="btn tiny danger" data-void="${i.id}">作廢</button>`
             : (i.status === 'paid' || i.status === 'refunded') ? `<button class="btn tiny secondary" data-r="${i.id}">收據</button>
             <button class="btn tiny danger" data-refund="${i.id}">退費</button>` : ''}</td></tr>`),
-          '沒有符合條件的收費單')}`;
+          '沒有符合條件的收費單')}
+        ${UI.pager(d, p => { page = p; draw(); })}`;
       el.querySelectorAll('[data-edit]').forEach(b => {
         b.onclick = () => invoiceDialog(d.rows.find(x => x.id === Number(b.dataset.edit)), null, draw);
       });
@@ -495,15 +503,20 @@ App.page('billing', {
         });
       });
     };
-    el.innerHTML = `<div class="toolbar">
+    el.innerHTML = `<div class="toolbar" style="flex-wrap:wrap;gap:8px">
+        ${UI.searchBox('iq', '搜尋個案／項目／收據號／發票號', () => { page = 1; draw(); })}
         <select id="st"><option value="unpaid">未收款</option><option value="">全部</option>
           <option value="paid">已收款</option><option value="refunded">已退費</option><option value="void">已作廢</option></select>
+        <select id="payer"><option value="">全部付款人別</option>
+          ${(App.meta.payer_types || ['自費']).map(p => `<option value="${UI.esc(p)}">${UI.esc(p)}</option>`).join('')}</select>
         <input id="from" type="date"><span>~</span><input id="to" type="date">
         <div class="spacer"></div>
         <button class="btn secondary" id="refunds">退費紀錄</button>
         <button class="btn" id="add">新增收費單</button>
       </div><div id="list"></div>`;
-    ['#st', '#from', '#to'].forEach(s => { el.querySelector(s).onchange = draw; });
+    ['#st', '#from', '#to', '#payer'].forEach(s2 => {
+      el.querySelector(s2).onchange = () => { page = 1; draw(); };
+    });
     el.querySelector('#add').onclick = async () => {
       const clients = await App.clientOptions(true);
       invoiceDialog(null, clients, draw);
@@ -1248,15 +1261,35 @@ App.page('audit', {
   module: 'settings',
   async render(el) {
     if (App.me.role !== 'admin') { el.innerHTML = '<div class="empty">僅管理者可檢視</div>'; return; }
+    let page = 1;
     const draw = async () => {
-      const rows = await GET(`/audit-logs?q=${encodeURIComponent(el.querySelector('#q').value.trim())}`);
-      el.querySelector('#list').innerHTML = UI.table(['時間', '操作者', '動作', '對象', '細節'], rows.map(r => `<tr>
-        <td>${UI.esc(r.created_at)}</td><td>${UI.esc(r.actor_name)}（${r.actor_type === 'client' ? '個案' : '員工'}）</td>
+      const q = new URLSearchParams({
+        q: el.querySelector('#q').value.trim(),
+        from: el.querySelector('#from').value,
+        to: el.querySelector('#to').value,
+        action: el.querySelector('#act').value,
+        page, size: 100
+      });
+      const d = await GET('/audit-logs?' + q.toString());
+      el.querySelector('#list').innerHTML = UI.table(['時間', '操作者', '動作', '對象', '細節'], d.rows.map(r => `<tr>
+        <td style="white-space:nowrap">${UI.esc(r.created_at)}</td>
+        <td>${UI.esc(r.actor_name)}（${r.actor_type === 'client' ? '個案' : r.actor_type === 'system' ? '系統' : '員工'}）</td>
         <td>${UI.esc(r.action)}</td><td>${UI.esc(r.target)}</td>
-        <td style="font-size:12px;color:var(--muted)">${UI.esc(r.detail)}</td></tr>`));
+        <td class="wrap" style="font-size:12px;color:var(--muted)">${UI.esc(r.detail)}</td></tr>`))
+        + UI.pager(d, p => { page = p; draw(); });
     };
-    el.innerHTML = `<div class="toolbar"><input id="q" placeholder="搜尋動作／操作者／對象"><div class="spacer"></div></div><div id="list"></div>`;
-    el.querySelector('#q').oninput = () => { clearTimeout(el._t); el._t = setTimeout(draw, 300); };
+    const reset = () => { page = 1; draw(); };
+    el.innerHTML = `<div class="toolbar" style="flex-wrap:wrap;gap:8px">
+        ${UI.searchBox('q', '搜尋動作／操作者／對象／細節', reset)}
+        <select id="act"><option value="">全部動作</option>
+          ${['調閱晤談紀錄', '批次列印', '列印', '刪除', '停用', '修改', '登入', 'AI 助理', '匯出']
+    .map(a => `<option value="${a}">${a}</option>`).join('')}</select>
+        <input type="date" id="from" title="起始日">
+        <input type="date" id="to" title="結束日">
+        <div class="spacer"></div></div><div id="list"></div>`;
+    el.querySelector('#act').onchange = reset;
+    el.querySelector('#from').onchange = reset;
+    el.querySelector('#to').onchange = reset;
     await draw();
   }
 });

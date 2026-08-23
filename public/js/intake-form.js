@@ -46,6 +46,7 @@ async function boot() {
             ${[['', '不方便透露'], ['male', '男'], ['female', '女'], ['other', '其他']]
     .map(o => `<option value="${o[0]}"${o[0] === d.gender ? ' selected' : ''}>${o[1]}</option>`).join('')}</select></div>
           ${row('birth_date', '出生日期', d.birth_date, { type: 'date' })}
+          ${row('id_no', '身分證字號（初談建檔用）', d.id_no)}
           ${row('email', 'Email', d.email, { type: 'email' })}
           ${row('address', '通訊地址', d.address)}
           ${row('occupation', '職業／就讀學校', d.occupation)}
@@ -63,6 +64,34 @@ async function boot() {
             ${row('guardian_relationship', '法代關係', d.guardian_relationship)}
             ${row('guardian_phone', '法代電話', d.guardian_phone, { type: 'tel' })}
           </div></div>
+
+        <div class="card"><h3>過往經驗</h3>
+          <div style="font-size:12.5px;color:var(--muted);margin-bottom:8px">
+            沒有經驗也沒關係，這只是幫助心理師了解您的起點。</div>
+          <div class="form-grid">
+            <div class="form-row full"><label>接受諮商經驗</label><select name="prior_counseling_kind">
+              ${[['無', '無：過去沒有諮商經驗'], ['有', '有：過去曾經諮商過']]
+    .map(o => `<option value="${o[0]}"${String(d.prior_counseling || '').startsWith(o[0]) ? ' selected' : ''}>${o[1]}</option>`).join('')}</select></div>
+            ${row('prior_counseling_detail', '若有：約多久前、持續多久',
+    String(d.prior_counseling || '').replace(/^[無有]\s*/, ''), { placeholder: '例：兩年前，持續約半年' })}
+            <div class="form-row full"><label>就醫經驗（精神科／身心科）</label><select name="prior_medical_kind">
+              ${[['無', '無：從未就診'], ['曾經就診', '曾經就診過'], ['就醫中', '目前就醫中']]
+    .map(o => `<option value="${o[0]}"${String(d.prior_medical || '').startsWith(o[0]) ? ' selected' : ''}>${o[1]}</option>`).join('')}</select></div>
+            ${row('prior_medical_detail', '若有：約多久前、持續多久、目前用藥',
+    String(d.prior_medical || '').replace(/^(無|曾經就診|就醫中)\s*/, ''))}
+          </div></div>
+
+        <div class="card"><h3>希望的諮商方式</h3><div class="form-grid">
+          <div class="form-row full"><label>諮商模式</label><select name="service_mode">
+            ${['', '個別諮商', '家庭／伴侶諮商', '團體諮商']
+    .map(o => `<option value="${o}"${o === d.service_mode ? ' selected' : ''}>${o || '尚未決定'}</option>`).join('')}</select></div>
+          <div class="form-row full"><label>主訴議題（可複選）</label>
+            <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:6px">
+              ${['自我成長', '親密關係與婚姻', '家庭議題', '人際關係', '生涯探索', '生活適應',
+    '生理健康（疾患）', '心理疾患或傾向', '其他'].map(t => `<label style="font-size:13.5px;display:flex;gap:6px;align-items:center">
+                <input type="checkbox" class="topic" value="${UI.esc(t)}"${String(d.topics || '').includes(t) ? ' checked' : ''}>${UI.esc(t)}</label>`).join('')}
+            </div></div>
+        </div></div>
 
         <div class="card"><h3>想談的事</h3><div class="form-grid">
           ${area('main_issue', '目前主要的困擾', d.main_issue, '例如：最近半年睡不好、工作壓力大、常感到焦慮…')}
@@ -95,6 +124,12 @@ async function boot() {
       if (i.type !== 'radio') data[i.name] = i.value.trim();
     });
     if (!data.name) return UI.toast('請填寫姓名', true);
+    // 兩段式欄位（有／無 + 說明）在送出時合併成一句，資料庫存的是完整敘述
+    data.prior_counseling = [data.prior_counseling_kind, data.prior_counseling_detail].filter(Boolean).join(' ');
+    data.prior_medical = [data.prior_medical_kind, data.prior_medical_detail].filter(Boolean).join(' ');
+    delete data.prior_counseling_kind; delete data.prior_counseling_detail;
+    delete data.prior_medical_kind; delete data.prior_medical_detail;
+    data.topics = [...app.querySelectorAll('.topic:checked')].map(x => x.value).join('、');
     // 量表全部作答才送出，只填一半視同未填（避免產生無效分數）
     const answers = s.items.map((_, i) => {
       const el = app.querySelector(`input[name=q${i}]:checked`);

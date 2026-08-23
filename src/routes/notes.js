@@ -1,5 +1,5 @@
 const express = require('express');
-const { db, audit, today, nowStamp, getSetting } = require('../db');
+const { db, audit, today, nowStamp, getSetting, listQuery } = require('../db');
 const { requireStaff, requireNoteAccess, canViewNote, isSupervisorOf, clientIp } = require('../auth');
 
 const router = express.Router();
@@ -235,11 +235,20 @@ router.post('/print-batches/:batch/done', requireStaff('notes'), (req, res) => {
 
 // 批次列印軌跡：不提供修改與刪除端點，只能查
 router.get('/print-batches', requireStaff('notes'), (req, res) => {
-  const mine = req.user.role === 'admin' || req.user.role === 'supervisor' ? '' : 'WHERE user_id = ?';
-  const args = mine ? [req.user.id] : [];
-  const rows = db.prepare(`SELECT * FROM print_batches ${mine} ORDER BY id DESC LIMIT 200`).all(...args);
+  const where = [], args = [];
+  if (!['admin', 'supervisor'].includes(req.user.role)) { where.push('user_id = ?'); args.push(req.user.id); }
+  if (req.query.purpose) { where.push('purpose = ?'); args.push(String(req.query.purpose)); }
+  if (req.query.from) { where.push('created_at >= ?'); args.push(String(req.query.from)); }
+  if (req.query.to) { where.push('created_at <= ?'); args.push(String(req.query.to) + ' 23:59:59'); }
+  const page = listQuery({
+    from: 'print_batches', where, args,
+    search: String(req.query.q || ''),
+    searchFields: ['batch_no', 'user_name', 'purpose', 'purpose_note'],
+    order: 'id DESC', page: req.query.page, size: Number(req.query.size) || 50, maxSize: 200
+  });
   res.json({
-    rows: rows.map(r => ({ ...r, filters: JSON.parse(r.filters || '{}'), note_ids: JSON.parse(r.note_ids || '[]') })),
+    ...page,
+    rows: page.rows.map(r => ({ ...r, filters: JSON.parse(r.filters || '{}'), note_ids: JSON.parse(r.note_ids || '[]') })),
     purposes: PRINT_PURPOSES,
     daily_limit: Number(getSetting('print_batch_daily_limit', '100')),
     anomalies: batchAnomalies(req.user)

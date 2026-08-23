@@ -31,7 +31,9 @@ ensureColumns('clients', {
 });
 ensureColumns('clients', {
   // LINE 官方帳號綁定：個案在官方帳號傳訊時據此對應到個案
-  line_user_id: "TEXT NOT NULL DEFAULT ''"
+  line_user_id: "TEXT NOT NULL DEFAULT ''",
+  // 主要就診據點：各館為不同法律主體，同意書與收據抬頭依此決定
+  site_id: 'INTEGER REFERENCES sites(id)'
 });
 ensureColumns('users', {
   // 該心理師的 LINE 群組：個案的請假／改期訊息轉達到這裡等回覆
@@ -61,7 +63,10 @@ ensureColumns('reschedule_requests', {
 });
 ensureColumns('consent_templates', {
   // 停用的範本不再要求新個案簽署，但已簽署的紀錄仍保留
-  active: 'INTEGER NOT NULL DEFAULT 1'
+  active: 'INTEGER NOT NULL DEFAULT 1',
+  // 據點別同意書：各館為不同法律主體，同意書抬頭與收費條款不同。
+  // 留空表示全所適用；填了就只有該據點的個案需要簽。
+  site_id: 'INTEGER REFERENCES sites(id)'
 });
 ensureColumns('intakes', {
   id_no: "TEXT NOT NULL DEFAULT ''",
@@ -216,6 +221,16 @@ db.exec(`CREATE TABLE IF NOT EXISTS intake_forms (
   created_at TEXT NOT NULL DEFAULT (datetime('now','localtime'))
 );
 CREATE INDEX IF NOT EXISTS idx_intakeform_status ON intake_forms(status, created_at);`);
+// 初談表欄位（對齊擁抱心理紙本初談表）
+ensureColumns('intake_forms', {
+  id_no: "TEXT NOT NULL DEFAULT ''",
+  prior_counseling: "TEXT NOT NULL DEFAULT ''",   // 接受諮商經驗：無／有（約多久前、持續多久）
+  prior_medical: "TEXT NOT NULL DEFAULT ''",      // 就醫經驗：無／曾經就診／就醫中
+  service_mode: "TEXT NOT NULL DEFAULT ''",       // 諮商模式：個別／家庭伴侶／團體
+  topics: "TEXT NOT NULL DEFAULT ''",             // 主訴議題（可複選，逗號分隔）
+  referral_note: "TEXT NOT NULL DEFAULT ''"       // 轉介資訊
+});
+
 
 // ---- 紀錄類型與非個案服務（M8-01～04）----
 // 外派演講、企業講座這類「沒有個案」的服務，過去被迫掛在虛擬個案底下，
@@ -314,6 +329,9 @@ const UI_TEXT_KEYS = Object.keys(UI_TEXT_DEFAULTS);
     session_minutes: '50',
     default_fee: '2000',
     intake_fee: '2500',
+    couple_fee: '3200',                 // 伴侶／家庭諮商（80 分鐘）
+    late_cancel_fee: '600',             // 24 小時內臨時取消，下次預約加收
+    extend_unit_minutes: '25',          // 延長晤談以半節為單位
     cancel_hours: '24',                 // 免收費取消門檻（小時）
     no_show_fee_rate: '0.5',            // 未到收費比例
     case_code_prefix: 'C',
@@ -528,6 +546,40 @@ function listSetting(key, fallback = '') {
   return getSetting(key, fallback).split(',').map(s => s.trim()).filter(Boolean);
 }
 
+// ---- 清單查詢共用：搜尋、篩選、分頁 ----
+// 資料量一大，各頁自己 LIMIT 200 就會開始漏資料，而且每頁的寫法都不一樣。
+// 統一成這個函式：回傳 { rows, total, page, size, pages }，前端用同一個分頁元件。
+//
+//   listQuery({ select, from, where, args, search, searchFields, order, page, size })
+//
+// search 會對 searchFields 逐欄做 LIKE，任何一欄命中即算命中（OR）。
+function listQuery({ select = '*', from, where = [], args = [], search = '',
+  searchFields = [], order = 'id DESC', page = 1, size = 50, maxSize = 500 }) {
+  const conds = [...where];
+  const params = [...args];
+  const kw = String(search || '').trim();
+  if (kw && searchFields.length) {
+    conds.push('(' + searchFields.map(f => `${f} LIKE ?`).join(' OR ') + ')');
+    for (const _ of searchFields) params.push(`%${kw}%`);
+  }
+  const whereSql = conds.length ? 'WHERE ' + conds.join(' AND ') : '';
+  const total = db.prepare(`SELECT COUNT(*) n FROM ${from} ${whereSql}`).get(...params).n;
+  const sz = Math.min(Math.max(Number(size) || 50, 1), maxSize);
+  const pg = Math.max(Number(page) || 1, 1);
+  const rows = db.prepare(`SELECT ${select} FROM ${from} ${whereSql} ORDER BY ${order} LIMIT ? OFFSET ?`)
+    .all(...params, sz, (pg - 1) * sz);
+  return { rows, total, page: pg, size: sz, pages: Math.max(1, Math.ceil(total / sz)) };
+}
+
+// 從 query string 取出分頁與搜尋參數（各路由共用，避免每支各寫一次）
+function listParams(q = {}) {
+  return {
+    search: String(q.q || '').slice(0, 60),
+    page: Number(q.page) || 1,
+    size: Math.min(Number(q.size) || 50, 500)
+  };
+}
+
 function audit(actorType, actorId, actorName, action, target = '', detail = '') {
   db.prepare('INSERT INTO audit_logs (actor_type, actor_id, actor_name, action, target, detail) VALUES (?,?,?,?,?,?)')
     .run(actorType, actorId, actorName, action, target, typeof detail === 'string' ? detail : JSON.stringify(detail));
@@ -653,5 +705,6 @@ CREATE INDEX IF NOT EXISTS idx_refund_client ON refunds(client_id, date);`);
 
 module.exports = {
   db, SECRET, DATA_DIR, UPLOAD_DIR, getSetting, setSetting, listSetting, audit,
-  today, nowTime, nowStamp, addDays, ageYears, nextClientCode, UI_TEXT_KEYS
+  today, nowTime, nowStamp, addDays, ageYears, nextClientCode, UI_TEXT_KEYS,
+  listQuery, listParams
 };

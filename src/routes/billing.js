@@ -1,5 +1,5 @@
 const express = require('express');
-const { db, audit, today, nowStamp, getSetting, listSetting } = require('../db');
+const { db, audit, today, nowStamp, getSetting, listSetting, listQuery } = require('../db');
 const { requireStaff } = require('../auth');
 const { sendNotification } = require('../notify');
 
@@ -24,17 +24,24 @@ router.get('/invoices', requireStaff('billing'), (req, res) => {
   if (client_id) { where.push('i.client_id = ?'); args.push(Number(client_id)); }
   if (from) { where.push('i.date >= ?'); args.push(from); }
   if (to) { where.push('i.date <= ?'); args.push(to); }
-  const rows = db.prepare(`SELECT i.*, c.name AS client_name, c.code AS client_code, u.name AS counselor_name,
-      (SELECT COALESCE(SUM(amount),0) FROM refunds rf WHERE rf.invoice_id = i.id) AS refunded
-    FROM invoices i JOIN clients c ON c.id = i.client_id
-    LEFT JOIN appointments a ON a.id = i.appointment_id
-    LEFT JOIN users u ON u.id = a.counselor_id
-    ${where.length ? 'WHERE ' + where.join(' AND ') : ''}
-    ORDER BY i.status = 'paid', i.date DESC, i.id DESC LIMIT 500`).all(...args);
+  const page = listQuery({
+    select: `i.*, c.name AS client_name, c.code AS client_code, u.name AS counselor_name,
+      (SELECT COALESCE(SUM(amount),0) FROM refunds rf WHERE rf.invoice_id = i.id) AS refunded`,
+    from: `invoices i JOIN clients c ON c.id = i.client_id
+      LEFT JOIN appointments a ON a.id = i.appointment_id
+      LEFT JOIN users u ON u.id = a.counselor_id`,
+    where, args,
+    search: String(req.query.q || ''),
+    searchFields: ['c.name', 'c.code', 'i.item', 'i.receipt_no', 'i.invoice_no'],
+    order: "i.status = 'paid', i.date DESC, i.id DESC",
+    page: req.query.page, size: Number(req.query.size) || 500, maxSize: 1000
+  });
+  const rows = page.rows;
   const sum = k => rows.filter(r => r.status === k).reduce((a, b) => a + b.amount, 0);
   const totalRefunded = rows.reduce((a, b) => a + (b.refunded || 0), 0);
   res.json({
-    rows, total_unpaid: sum('unpaid'), total_paid: sum('paid'),
+    rows, total_count: page.total, page: page.page, size: page.size, pages: page.pages,
+    total_unpaid: sum('unpaid'), total_paid: sum('paid'),
     total_refunded: totalRefunded,
     // 實收：已收款金額扣掉已退還的部分
     total_net: sum('paid') + sum('refunded') - totalRefunded

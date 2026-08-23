@@ -103,6 +103,46 @@ const UI = {
     return out;
   },
 
+  // 分頁列：資料量大的清單共用。onGo(page) 由呼叫端重新查詢。
+  // 只有一頁時不顯示，避免小清單上多出無意義的元件。
+  pager(state, onGo) {
+    const { page = 1, pages = 1, total = 0, size = 50 } = state || {};
+    const id = 'pg-' + Math.random().toString(36).slice(2, 7);
+    setTimeout(() => {
+      const box = document.getElementById(id);
+      if (!box) return;
+      box.querySelectorAll('[data-p]').forEach(b => { b.onclick = () => onGo(Number(b.dataset.p)); });
+      const jump = box.querySelector('.pg-jump');
+      if (jump) jump.onchange = () => {
+        const v = Math.min(Math.max(Number(jump.value) || 1, 1), pages);
+        onGo(v);
+      };
+    }, 0);
+    if (pages <= 1) {
+      return `<div class="pager" id="${id}"><span class="pg-info">共 ${total} 筆</span></div>`;
+    }
+    const btn = (p, label, disabled) => `<button class="btn tiny secondary" data-p="${p}"${disabled ? ' disabled' : ''}>${label}</button>`;
+    return `<div class="pager" id="${id}">
+      <span class="pg-info">共 ${total} 筆，第 ${page}／${pages} 頁（每頁 ${size} 筆）</span>
+      <div class="spacer"></div>
+      ${btn(1, '第一頁', page <= 1)}
+      ${btn(page - 1, '上一頁', page <= 1)}
+      <input class="pg-jump" type="number" min="1" max="${pages}" value="${page}" style="width:64px">
+      ${btn(page + 1, '下一頁', page >= pages)}
+      ${btn(pages, '最後一頁', page >= pages)}
+    </div>`;
+  },
+
+  // 搜尋框：輸入停 300ms 才查，避免每打一個字就打一次 API
+  searchBox(id, placeholder, onSearch) {
+    setTimeout(() => {
+      const el = document.getElementById(id);
+      if (!el) return;
+      el.oninput = () => { clearTimeout(el._t); el._t = setTimeout(() => onSearch(el.value.trim()), 300); };
+    }, 0);
+    return `<input id="${id}" class="search-box" placeholder="${UI.esc(placeholder)}">`;
+  },
+
   table(headers, rowsHtml, emptyMsg = '目前沒有資料') {
     if (!rowsHtml.length) return `<div class="empty">${UI.esc(emptyMsg)}</div>`;
     return `<div class="table-wrap"><table class="list">

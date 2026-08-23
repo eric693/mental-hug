@@ -78,11 +78,17 @@ App.page('clients', {
   sub: '個案基本資料與服務狀態；晤談紀錄僅主責心理師、督導與管理者可讀',
   module: 'clients',
   async render(el) {
+    let page = 1;
     const draw = async () => {
-      const q = el.querySelector('#q') ? el.querySelector('#q').value.trim() : '';
-      const st = el.querySelector('#st') ? el.querySelector('#st').value : '';
-      const cs = el.querySelector('#cs') ? el.querySelector('#cs').value : '';
-      const list = await GET(`/clients?q=${encodeURIComponent(q)}&status=${st}&counselor_id=${cs}`);
+      const qs = new URLSearchParams({
+        q: el.querySelector('#q') ? el.querySelector('#q').value.trim() : '',
+        status: el.querySelector('#st') ? el.querySelector('#st').value : '',
+        counselor_id: el.querySelector('#cs') ? el.querySelector('#cs').value : '',
+        risk: el.querySelector('#rk') ? el.querySelector('#rk').value : '',
+        page, size: 50
+      });
+      const d = await GETP('/clients?' + qs.toString());
+      const list = d.rows;
       const rows = list.map(c => `<tr>
         <td>${UI.esc(c.code)}</td>
         <td><a href="#client/${c.id}"><strong>${UI.esc(c.name)}</strong></a>
@@ -95,18 +101,21 @@ App.page('clients', {
         <td>${c.next_session || '-'}</td>
         <td>${UI.esc(c.phone || '')}</td></tr>`);
       el.querySelector('#list').innerHTML = UI.table(
-        ['編號', '姓名', '年齡／性別', '主責心理師', '狀態', '風險', '最近晤談', '下次預約', '聯絡電話'], rows, '沒有符合條件的個案');
+        ['編號', '姓名', '年齡／性別', '主責心理師', '狀態', '風險', '最近晤談', '下次預約', '聯絡電話'],
+        rows, '沒有符合條件的個案')
+        + UI.pager(d, p => { page = p; draw(); });
     };
-    el.innerHTML = `<div class="toolbar">
-        <input id="q" placeholder="搜尋姓名／編號／電話">
+    const reset = () => { page = 1; draw(); };
+    el.innerHTML = `<div class="toolbar" style="flex-wrap:wrap;gap:8px">
+        <input id="q" class="search-box" placeholder="搜尋姓名／編號／電話">
         <select id="st"><option value="">全部狀態</option>${App.enumOptions('client_status').map(o => `<option value="${o[0]}">${o[1]}</option>`).join('')}</select>
         <select id="cs">${App.counselorOptions(true).map(o => `<option value="${o[0]}">${UI.esc(o[1])}</option>`).join('')}</select>
+        <select id="rk"><option value="">全部風險</option>${App.enumOptions('risk_level').map(o => `<option value="${o[0]}">${o[1]}</option>`).join('')}</select>
         <div class="spacer"></div><button class="btn" id="add">新增個案</button>
       </div><div id="list"></div>`;
-    el.querySelector('#add').onclick = () => clientDialog(null, draw);
-    el.querySelector('#q').oninput = () => { clearTimeout(el._t); el._t = setTimeout(draw, 300); };
-    el.querySelector('#st').onchange = draw;
-    el.querySelector('#cs').onchange = draw;
+    el.querySelector('#add').onclick = () => clientDialog(null, reset);
+    el.querySelector('#q').oninput = () => { clearTimeout(el._t); el._t = setTimeout(reset, 300); };
+    ['#st', '#cs', '#rk'].forEach(x => { el.querySelector(x).onchange = reset; });
     await draw();
   }
 });

@@ -150,7 +150,9 @@ router.post('/intakes/:id/convert', requireStaff('intake'), (req, res) => {
 const FORM_FIELDS = ['name', 'phone', 'gender', 'birth_date', 'email', 'address', 'occupation', 'marital',
   'emergency_name', 'emergency_relationship', 'emergency_phone',
   'guardian_name', 'guardian_relationship', 'guardian_phone',
-  'main_issue', 'history', 'expectation', 'preferred_time', 'source'];
+  'main_issue', 'history', 'expectation', 'preferred_time', 'source',
+  // 對齊擁抱心理紙本初談表的欄位
+  'id_no', 'prior_counseling', 'prior_medical', 'service_mode', 'topics', 'referral_note'];
 
 function formPublic(f) {
   const out = { token: f.token, status: f.status, expires_at: f.expires_at, submitted_at: f.submitted_at };

@@ -1,6 +1,6 @@
 const express = require('express');
 const bcrypt = require('bcryptjs');
-const { db, audit, today, addDays, getSetting, setSetting, listSetting, UI_TEXT_KEYS } = require('../db');
+const { db, audit, today, addDays, getSetting, setSetting, listSetting, listQuery, UI_TEXT_KEYS } = require('../db');
 const { requireStaff, requireAdmin, MODULES, MODULE_KEYS, ROLE_DEFAULT_MODULES, parsePermissions } = require('../auth');
 const { SCALE_KEYS } = require('../scales');
 const { withReportState } = require('./risk');
@@ -750,13 +750,21 @@ router.get('/retention', requireStaff('clients'), (req, res) => {
 
 // 稽核軌跡：誰在何時調閱了哪位個案的紀錄
 router.get('/audit-logs', requireAdmin, (req, res) => {
-  const { q = '', from = '', to = '' } = req.query;
+  const { action = '', actor = '', from = '', to = '' } = req.query;
   const where = [], args = [];
-  if (q) { where.push('(action LIKE ? OR actor_name LIKE ? OR target LIKE ?)'); args.push(`%${q}%`, `%${q}%`, `%${q}%`); }
+  if (action) { where.push('action LIKE ?'); args.push(`%${action}%`); }
+  if (actor) { where.push('actor_name LIKE ?'); args.push(`%${actor}%`); }
   if (from) { where.push('created_at >= ?'); args.push(from); }
-  if (to) { where.push('created_at <= ?'); args.push(to + ' 23:59'); }
-  res.json(db.prepare(`SELECT * FROM audit_logs ${where.length ? 'WHERE ' + where.join(' AND ') : ''}
-    ORDER BY id DESC LIMIT 300`).all(...args));
+  if (to) { where.push('created_at <= ?'); args.push(to + ' 23:59:59'); }
+  const page = listQuery({
+    from: 'audit_logs', where, args,
+    search: String(req.query.q || ''),
+    searchFields: ['actor_name', 'action', 'target', 'detail'],
+    order: 'id DESC',
+    page: req.query.page, size: Number(req.query.size) || 100, maxSize: 500
+  });
+  res.json(page);
 });
+
 
 module.exports = router;

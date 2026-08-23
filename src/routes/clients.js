@@ -1,6 +1,6 @@
 const express = require('express');
 const bcrypt = require('bcryptjs');
-const { db, audit, today, nextClientCode, ageYears, getSetting } = require('../db');
+const { db, audit, today, nextClientCode, ageYears, getSetting, listQuery } = require('../db');
 const { requireStaff, canViewClientNotes, clientIp } = require('../auth');
 
 const { createCloseFollowUps } = require('./aftercare');
@@ -56,13 +56,23 @@ router.get('/clients', requireStaff('clients'), (req, res) => {
   if (risk) { where.push('c.risk_level = ?'); args.push(risk); }
   if (counselor_id) { where.push('c.counselor_id = ?'); args.push(Number(counselor_id)); }
   if (q) { where.push('(c.name LIKE ? OR c.code LIKE ? OR c.phone LIKE ?)'); args.push(`%${q}%`, `%${q}%`, `%${q}%`); }
-  const rows = db.prepare(`
-    SELECT c.*, u.name AS counselor_name,
+  // 分頁：預設給大一點（下拉選單類的呼叫端要一次拿完），畫面要分頁時自己帶 page/size。
+  // 總筆數放在 X-Total-Count，回應本身維持陣列，既有呼叫端不必改。
+  const { rows, total, page, size, pages } = listQuery({
+    select: `c.*, u.name AS counselor_name,
       (SELECT COUNT(*) FROM session_notes n WHERE n.client_id = c.id) AS note_count,
       (SELECT MAX(date) FROM appointments a WHERE a.client_id = c.id AND a.status = 'done') AS last_session,
-      (SELECT MIN(date) FROM appointments a WHERE a.client_id = c.id AND a.date >= date('now','localtime') AND a.status IN ('booked','arrived')) AS next_session
-    FROM clients c LEFT JOIN users u ON u.id = c.counselor_id
-    WHERE ${where.join(' AND ')} ORDER BY c.status = 'closed', c.created_at DESC`).all(...args);
+      (SELECT MIN(date) FROM appointments a WHERE a.client_id = c.id AND a.date >= date('now','localtime')
+        AND a.status IN ('booked','arrived')) AS next_session`,
+    from: 'clients c LEFT JOIN users u ON u.id = c.counselor_id',
+    where, args,
+    order: "c.status = 'closed', c.created_at DESC",
+    page: req.query.page, size: Number(req.query.size) || 1000, maxSize: 2000
+  });
+  res.set('X-Total-Count', String(total));
+  res.set('X-Page', String(page));
+  res.set('X-Page-Size', String(size));
+  res.set('X-Page-Count', String(pages));
   res.json(rows.map(r => ({ ...r, age: ageYears(r.birth_date) })));
 });
 
@@ -73,7 +83,8 @@ router.get('/clients/:id', requireStaff('clients'), (req, res) => {
   if (!c) return res.status(404).json({ error: '找不到此個案' });
   delete c.password_hash;
   const consents = db.prepare('SELECT id, key, title, agreed, signer_name, signer_role, version, signed_at FROM consents WHERE client_id = ? ORDER BY signed_at DESC').all(c.id);
-  const templates = db.prepare('SELECT * FROM consent_templates WHERE active = 1 ORDER BY sort, id').all()
+  const templates = db.prepare(`SELECT * FROM consent_templates WHERE active = 1
+      AND (site_id IS NULL OR site_id = ?) ORDER BY sort, id`).all(c.site_id || 0)
     .filter(t => !t.minor_only || c.is_minor);
   res.json({
     ...c,

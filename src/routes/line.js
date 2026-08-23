@@ -1,5 +1,5 @@
 const express = require('express');
-const { db, audit, today, getSetting, setSetting, nowStamp } = require('../db');
+const { db, audit, today, getSetting, setSetting, nowStamp, listQuery } = require('../db');
 const { requireStaff } = require('../auth');
 const line = require('../line');
 const { conflictOf, endTime } = require('./schedule');
@@ -263,14 +263,26 @@ router.get('/api/reschedule-requests', requireStaff('line'), (req, res) => {
   const where = status === 'open' ? "r.status IN ('new','relayed','replied')"
     : status === 'all' ? '1 = 1' : 'r.status = ?';
   const args = (status === 'open' || status === 'all') ? [] : [status];
-  res.json(db.prepare(`SELECT r.*, c.name AS client_name, c.code AS client_code, c.phone AS client_phone,
+  const page = listQuery({
+    select: `r.*, c.name AS client_name, c.code AS client_code, c.phone AS client_phone,
       c.line_user_id, u.name AS counselor_name, u.line_group_id,
-      a.date, a.start_time, a.end_time, a.status AS appt_status, a.type AS appt_type, a.room_id, a.mode
-    FROM reschedule_requests r
-    LEFT JOIN clients c ON c.id = r.client_id
-    LEFT JOIN users u ON u.id = r.counselor_id
-    LEFT JOIN appointments a ON a.id = r.appointment_id
-    WHERE ${where} ORDER BY r.id DESC LIMIT 200`).all(...args));
+      a.date, a.start_time, a.end_time, a.status AS appt_status, a.type AS appt_type, a.room_id, a.mode`,
+    from: `reschedule_requests r
+      LEFT JOIN clients c ON c.id = r.client_id
+      LEFT JOIN users u ON u.id = r.counselor_id
+      LEFT JOIN appointments a ON a.id = r.appointment_id`,
+    where: [where], args,
+    search: String(req.query.q || ''),
+    searchFields: ['c.name', 'c.code', 'r.raw_text', 'r.counselor_reply', 'u.name'],
+    order: 'r.id DESC',
+    page: req.query.page, size: Number(req.query.size) || 50, maxSize: 200
+  });
+  // 這支既有呼叫端預期陣列，總數改放標頭
+  res.set('X-Total-Count', String(page.total));
+  res.set('X-Page', String(page.page));
+  res.set('X-Page-Size', String(page.size));
+  res.set('X-Page-Count', String(page.pages));
+  res.json(page.rows);
 });
 
 // 櫃檯代錄（個案打電話來、或還沒接上 LINE 時）
@@ -457,9 +469,20 @@ router.delete('/api/reschedule-requests/:id', requireStaff('line'), (req, res) =
 
 // 傳話軌跡（最近 200 筆），供行政確認訊息有沒有真的送出去
 router.get('/api/line/events', requireStaff('line'), (req, res) => {
-  res.json(db.prepare(`SELECT e.*, c.name AS client_name, u.name AS counselor_name
-    FROM line_events e LEFT JOIN clients c ON c.id = e.client_id LEFT JOIN users u ON u.id = e.counselor_id
-    ORDER BY e.id DESC LIMIT 200`).all());
+  const where = [], args = [];
+  if (req.query.direction) { where.push('e.direction = ?'); args.push(String(req.query.direction)); }
+  if (req.query.source_type) { where.push('e.source_type = ?'); args.push(String(req.query.source_type)); }
+  if (req.query.status) { where.push('e.status = ?'); args.push(String(req.query.status)); }
+  res.json(listQuery({
+    select: 'e.*, c.name AS client_name, u.name AS counselor_name',
+    from: `line_events e LEFT JOIN clients c ON c.id = e.client_id
+      LEFT JOIN users u ON u.id = e.counselor_id`,
+    where, args,
+    search: String(req.query.q || ''),
+    searchFields: ['e.text', 'e.source_id', 'c.name', 'u.name', 'e.error'],
+    order: 'e.id DESC',
+    page: req.query.page, size: Number(req.query.size) || 50, maxSize: 200
+  }));
 });
 
 // LINE 綁定狀態：哪些個案已綁、哪些心理師設了群組

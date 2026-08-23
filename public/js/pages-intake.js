@@ -156,12 +156,16 @@ App.page('intake', {
                 ${g('Email', f.email)}${g('地址', f.address)}${g('職業／就學', f.occupation)}${g('婚姻', f.marital)}
                 ${g('緊急聯絡人', `${f.emergency_name} ${f.emergency_relationship} ${f.emergency_phone}`)}
                 ${g('法定代理人', `${f.guardian_name} ${f.guardian_relationship} ${f.guardian_phone}`)}
-                ${g('方便時段', f.preferred_time)}${g('得知來源', f.source)}
+                ${g('身分證字號', f.id_no)}${g('方便時段', f.preferred_time)}${g('得知來源', f.source)}
+                ${g('接受諮商經驗', f.prior_counseling)}${g('就醫經驗', f.prior_medical)}
+                ${g('諮商模式', f.service_mode)}
+                <div style="grid-column:1/-1"><div class="dg-label">主訴議題</div>${UI.esc(f.topics || '-')}</div>
               </div>
               <div class="card" style="margin-top:12px;font-size:14px;line-height:1.8">
                 <strong>主要困擾：</strong>${UI.nl2br(f.main_issue) || '—'}<br>
                 <strong>就醫／諮商史：</strong>${UI.nl2br(f.history) || '—'}<br>
-                <strong>對諮商的期待：</strong>${UI.nl2br(f.expectation) || '—'}</div>
+                <strong>對諮商的期待：</strong>${UI.nl2br(f.expectation) || '—'}
+                ${f.referral_note ? `<br><strong>轉介資訊：</strong>${UI.nl2br(f.referral_note)}` : ''}</div>
               ${f.bsrs_total >= 0 ? `<div class="notice ${f.bsrs_alert ? 'danger' : ''}" style="margin-top:10px">
                 BSRS-5 心情溫度計：<strong>${f.bsrs_total}</strong> 分
                 ${f.bsrs_alert ? '；附加題（自殺意念）達 2 分以上，請優先安排並於初談前完成風險評估。' : ''}
@@ -371,7 +375,8 @@ App.page('intake-forms', {
                 <strong>對諮商的期待：</strong>${UI.nl2br(f.expectation) || '—'}</div>
               ${f.bsrs_total >= 0 ? `<div class="notice ${f.bsrs_alert ? 'danger' : ''}" style="margin-top:10px">
                 BSRS-5 心情溫度計：<strong>${f.bsrs_total}</strong> 分
-                ${f.bsrs_alert ? '；附加題（自殺意念）達 2 分以上，請優先安排並於初談前完成風險評估。' : ''}</div>` : ''}`
+                ${f.bsrs_alert ? '；附加題（自殺意念）達 2 分以上，請優先安排並於初談前完成風險評估。' : ''}</div>` : ''}
+              <button class="btn small secondary no-print" style="margin-top:14px" onclick="intakeFormPrint(${f.id})">列印初談表</button>`
           });
         };
       });
@@ -413,3 +418,40 @@ App.page('intake-forms', {
     await draw();
   }
 });
+
+// ---- 初談表列印版（對齊擁抱心理紙本表格）----
+// 有些個案仍在紙本簽名，或初談當下要把表放進紙本卷宗；版面照紙本走，直接可以歸檔。
+async function intakeFormPrint(id) {
+  const f = await GET(`/intake-forms/${id}`);
+  const t = await GET('/public/ui-texts').catch(() => ({}));
+  const cell = (label, value, wide) => `<tr><th${wide ? ' colspan="1"' : ''}>${UI.esc(label)}</th>
+    <td${wide ? ' colspan="3"' : ''}>${UI.esc(value || '')}</td></tr>`;
+  const pair = (l1, v1, l2, v2) => `<tr><th>${UI.esc(l1)}</th><td>${UI.esc(v1 || '')}</td>
+    <th>${UI.esc(l2)}</th><td>${UI.esc(v2 || '')}</td></tr>`;
+  UI.modal({
+    title: '初談表（列印版）', wide: true, hideFooter: true,
+    body: `<div class="print-doc">
+      <div class="doc-title">${UI.esc(t.center_name || '擁抱心理諮商所')}初談表</div>
+      <table class="doc" style="margin-top:14px">
+        ${pair('姓名', f.name, '身份證字號', f.id_no)}
+        ${pair('性別', TW.gender[f.gender] || '', '西元出生年/月/日', f.birth_date)}
+        ${pair('聯絡電話', f.phone, '地址', f.address)}
+        ${pair('緊急聯絡人', f.emergency_name, '關係', f.emergency_relationship)}
+        ${cell('緊急聯絡人電話', f.emergency_phone, true)}
+        ${cell('接受諮商經驗', f.prior_counseling, true)}
+        ${cell('就醫經驗', f.prior_medical, true)}
+        ${cell('如何知道本所', f.source, true)}
+        ${cell('諮商模式', f.service_mode, true)}
+        ${cell('主訴議題（可複選）', f.topics, true)}
+        ${cell('主要困擾', f.main_issue, true)}
+        <tr><th>初談諮商心理師</th><td colspan="3" style="height:52px">
+          （簽名）　　　　　　　　　　年　　月　　日</td></tr>
+        <tr><th>轉介諮商心理師</th><td colspan="3" style="height:52px"></td></tr>
+        <tr><th>轉介資訊</th><td colspan="3" style="height:120px;vertical-align:top">${UI.esc(f.referral_note || '')}</td></tr>
+      </table>
+      <div class="doc-foot">填寫時間：${UI.esc(f.submitted_at || '—')}
+        ${f.bsrs_total >= 0 ? `　BSRS-5：${f.bsrs_total} 分${f.bsrs_alert ? '（附加題達警戒）' : ''}` : ''}</div>
+    </div>
+    <button class="btn small secondary no-print" style="margin-top:14px" onclick="window.print()">列印</button>`
+  });
+}
