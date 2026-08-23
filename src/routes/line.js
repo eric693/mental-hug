@@ -2,6 +2,7 @@ const express = require('express');
 const { db, audit, today, getSetting, setSetting, nowStamp, listQuery } = require('../db');
 const { requireStaff } = require('../auth');
 const line = require('../line');
+const inquiries = require('./inquiries');
 const { conflictOf, endTime } = require('./schedule');
 
 const router = express.Router();
@@ -175,12 +176,18 @@ async function handleUserMessage(userId, text, replyToken) {
 
   const isReschedule = line.looksLikeReschedule(text);
   if (!isReschedule) {
-    // 非請假／改期的訊息一律進「個案訊息」讓櫃檯回覆，不打擾心理師群組
+    // 非改期的訊息進「多層次審核」流程：AI 先分類與標記情緒，行政初審後才轉心理師。
+    // 內容同時留一份在個案訊息串，櫃檯在原本習慣的地方也看得到。
     db.prepare("INSERT INTO messages (client_id, sender, content) VALUES (?, 'client', ?)").run(client.id, text);
+    const inquiry = await inquiries.createFromLine(client, text);
     const ack = line.fill(getSetting('line_ack_client'), { phone: getSetting('center_phone') });
     return line.send({
       kind: 'reply', replyToken, to: userId, text: ack,
-      flex: line.bubble({ title: '已收到您的訊息', tone: 'info', body: ack }),
+      flex: line.bubble({
+        title: '已收到您的訊息', tone: 'info', body: ack,
+        footer: inquiry.ai_urgency === 'high' && getSetting('center_phone')
+          ? `若情況緊急，請直接來電 ${getSetting('center_phone')}；如有立即危險請撥 1925 或 119。` : ''
+      }),
       meta: { source_type: 'user', client_id: client.id }
     });
   }
@@ -223,6 +230,32 @@ async function handleGroupMessage(groupId, text, replyToken) {
     direction: 'in', source_type: 'group', source_id: groupId, text,
     counselor_id: counselor ? counselor.id : null
   });
+
+  // 群組裡回覆「待擬稿的個案訊息」：優先比對這一類，其次才是改期申請
+  if (counselor) {
+    const pending = db.prepare(`SELECT * FROM case_inquiries
+      WHERE counselor_id = ? AND status IN ('relayed','returned') ORDER BY id DESC LIMIT 1`).get(counselor.id);
+    const tagged = text.match(/#(\d+)/);
+    const target = tagged
+      ? db.prepare("SELECT * FROM case_inquiries WHERE id = ? AND status IN ('relayed','returned')").get(Number(tagged[1]))
+      : pending;
+    if (target && (tagged || !db.prepare(`SELECT 1 FROM reschedule_requests
+      WHERE counselor_id = ? AND status IN ('relayed','replied')`).get(counselor.id))) {
+      db.prepare(`UPDATE case_inquiries SET draft = ?, drafted_by = ?, drafted_at = ?, status = 'drafted' WHERE id = ?`)
+        .run(text.slice(0, 2000), counselor.id, nowStamp(), target.id);
+      audit('system', null, 'LINE', '心理師於群組提交擬稿', String(target.id), { counselor_id: counselor.id });
+      return line.send({
+        kind: 'reply', replyToken, to: groupId,
+        text: `已收下您對 #${target.id} 的回覆擬稿，行政人員複審後會送給個案。`,
+        flex: line.bubble({
+          title: `已收到擬稿 #${target.id}`, tone: 'ok',
+          fields: [line.fieldRow('您的擬稿', text)],
+          body: '行政人員複審後才會送出給個案；若需修改，會在群組或系統中回覆您。'
+        }),
+        meta: { source_type: 'group', counselor_id: counselor.id }
+      });
+    }
+  }
 
   const m = text.match(/#(\d+)/);
   let r = m ? requestRow(Number(m[1])) : null;

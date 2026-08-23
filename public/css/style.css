@@ -408,3 +408,22 @@ table.list tr:hover td { background: #f8fbfb; }
 .pager .spacer { flex: 1; }
 .pager input.pg-jump { padding: 4px 6px; border: 1px solid var(--border); border-radius: 6px; font-size: 13px; text-align: center; }
 .search-box { min-width: 200px; }
+
+/* ---- 溝通儀表板 ---- */
+.inq { background: var(--card); border: 1px solid var(--border); border-radius: var(--radius);
+  padding: 12px 14px; margin-bottom: 10px; box-shadow: var(--shadow); }
+.inq.hot { border-left: 4px solid var(--danger); }
+.inq-head { display: flex; justify-content: space-between; gap: 10px; align-items: flex-start; flex-wrap: wrap; }
+.inq-code { font-size: 12px; color: var(--muted); margin-left: 6px; }
+.inq-body { margin-top: 8px; }
+.inq-label { font-size: 12px; color: var(--muted); margin-bottom: 2px; }
+.inq-text { font-size: 14px; line-height: 1.7; white-space: pre-wrap; word-break: break-word;
+  background: #f7f8f8; border-radius: 8px; padding: 8px 10px; }
+.inq-text.draft { background: var(--primary-light); }
+.inq-text.sent { background: var(--ok-bg); }
+.inq-ai { font-size: 12.5px; color: var(--muted); margin-top: 6px; }
+.inq-note { font-size: 12.5px; color: var(--muted); margin-top: 6px; }
+.inq-note.warn { color: var(--warn); }
+.inq-foot { display: flex; align-items: center; gap: 8px; margin-top: 10px; flex-wrap: wrap; }
+.inq-foot .spacer { flex: 1; }
+.inq-status { font-size: 12.5px; color: var(--muted); }

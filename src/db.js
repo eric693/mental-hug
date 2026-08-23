@@ -256,6 +256,41 @@ db.exec(`CREATE TABLE IF NOT EXISTS nonclient_services (
 );
 CREATE INDEX IF NOT EXISTS idx_nonclient_date ON nonclient_services(date);
 
+-- 個案訊息處理（多層次人工審核）
+-- 個案在官方帳號說的話 → AI 先分類與標記情緒 → 行政初審 → 心理師在平台擬稿
+-- → 行政複審 → 才送回個案。訊息不在群組裡飛來飛去，全部集中在儀表板上。
+CREATE TABLE IF NOT EXISTS case_inquiries (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  client_id INTEGER REFERENCES clients(id) ON DELETE SET NULL,
+  counselor_id INTEGER REFERENCES users(id),
+  source TEXT NOT NULL DEFAULT 'line',          -- line 官方帳號 / staff 櫃檯代錄
+  raw_text TEXT NOT NULL DEFAULT '',            -- 個案原話
+  -- AI 初篩結果（僅分類與摘要，不做臨床判斷）
+  ai_category TEXT NOT NULL DEFAULT '',         -- 預約異動／費用／情緒困擾／行政詢問／危機疑慮／其他
+  ai_sentiment TEXT NOT NULL DEFAULT '',        -- calm 平穩 / anxious 焦慮 / upset 不滿 / distress 明顯痛苦
+  ai_urgency TEXT NOT NULL DEFAULT 'normal',    -- low / normal / high
+  ai_summary TEXT NOT NULL DEFAULT '',
+  ai_flags TEXT NOT NULL DEFAULT '',            -- 需注意的關鍵字（如自傷字眼）
+  ai_at TEXT NOT NULL DEFAULT '',
+  -- 流程狀態
+  status TEXT NOT NULL DEFAULT 'new',
+  -- new 待行政初審 / relayed 待心理師擬稿 / drafted 待行政複審 /
+  -- sent 已回覆個案 / returned 複審退回心理師 / closed 不需回覆
+  admin_note TEXT NOT NULL DEFAULT '',
+  relayed_by INTEGER REFERENCES users(id),
+  relayed_at TEXT NOT NULL DEFAULT '',
+  draft TEXT NOT NULL DEFAULT '',               -- 心理師擬的回覆
+  drafted_by INTEGER REFERENCES users(id),
+  drafted_at TEXT NOT NULL DEFAULT '',
+  final_reply TEXT NOT NULL DEFAULT '',         -- 行政複審後實際送出的內容
+  approved_by INTEGER REFERENCES users(id),
+  approved_at TEXT NOT NULL DEFAULT '',
+  review_note TEXT NOT NULL DEFAULT '',
+  sent_at TEXT NOT NULL DEFAULT '',
+  created_at TEXT NOT NULL DEFAULT (datetime('now','localtime'))
+);
+CREATE INDEX IF NOT EXISTS idx_inquiry_status ON case_inquiries(status, created_at);
+
 -- 列印批次紀錄（M8-09）：批次列印等於特種個資的大量匯出，必須留下完整軌跡且不可修改
 CREATE TABLE IF NOT EXISTS print_batches (
   id INTEGER PRIMARY KEY AUTOINCREMENT,

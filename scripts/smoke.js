@@ -1036,6 +1036,82 @@ function startServer() {
     await admin.fails('POST', '/api/nonclient-services/migrate', { client_id: clientId }, '對象單位');
   });
 
+  // ---------------------------------------------------------------- 溝通儀表板
+  section('個案訊息多層次人工審核');
+  let inqId;
+  await test('AI 初篩：危機字眼一律標為高急迫度', async () => {
+    const r = await admin.ok('POST', '/api/inquiries',
+      { client_id: clientId, raw_text: '最近真的很累，有時候覺得活不下去' });
+    inqId = r.id;
+    const list = await admin.ok('GET', '/api/inquiries?status=new');
+    const row = list.rows.find(x => x.id === inqId);
+    assert(row, '應出現在待初審');
+    equal(row.ai_category, '危機疑慮', '分類');
+    equal(row.ai_urgency, 'high', '急迫度');
+    assert(row.ai_flags.includes('活不下去'), '應標出關鍵字');
+    // 急件排在清單前面
+    equal(list.rows[0].ai_urgency, 'high', '急件應排最前');
+  });
+  await test('流程順序不可跳過：未初審不能擬稿、未擬稿不能複審', async () => {
+    await lin.fails('POST', `/api/inquiries/${inqId}/draft`, { draft: '想先回' }, '初審');
+    await admin.fails('POST', `/api/inquiries/${inqId}/approve`, {}, '待複審');
+    await admin.fails('POST', `/api/inquiries/${inqId}/return`, { review_note: 'x' }, '待複審');
+  });
+  await test('五段流程跑完：初審→擬稿→退回→再擬稿→複審送出', async () => {
+    // 沒指定心理師時沿用個案的主責心理師；連主責都沒有才擋下
+    await admin.ok('POST', `/api/inquiries/${inqId}/relay`, { counselor_id: 2, admin_note: '請優先處理' });
+    let row = (await admin.ok('GET', '/api/inquiries?status=relayed')).rows.find(x => x.id === inqId);
+    equal(row.status, 'relayed', '初審後狀態');
+    assert(row.relayed_by, '應記錄初審人');
+
+    await lin.fails('POST', `/api/inquiries/${inqId}/draft`, { draft: '' }, '回覆內容');
+    await lin.ok('POST', `/api/inquiries/${inqId}/draft`, { draft: '初稿' });
+    row = (await admin.ok('GET', '/api/inquiries?status=drafted')).rows.find(x => x.id === inqId);
+    equal(row.status, 'drafted', '擬稿後狀態');
+
+    await admin.fails('POST', `/api/inquiries/${inqId}/return`, { review_note: '' }, '退回原因');
+    await admin.ok('POST', `/api/inquiries/${inqId}/return`, { review_note: '語氣再溫和一點' });
+    row = (await admin.ok('GET', '/api/inquiries?status=returned')).rows.find(x => x.id === inqId);
+    equal(row.status, 'returned', '退回後狀態');
+    equal(row.review_note, '語氣再溫和一點', '退回原因');
+
+    await lin.ok('POST', `/api/inquiries/${inqId}/draft`, { draft: '謝謝您願意說出來，我們很在意您的狀況' });
+    await admin.ok('POST', `/api/inquiries/${inqId}/approve`,
+      { final_reply: '謝謝您願意說出來，我們很在意您的狀況，明天會由心理師與您聯繫。' });
+    row = (await admin.ok('GET', '/api/inquiries?status=sent')).rows.find(x => x.id === inqId);
+    equal(row.status, 'sent', '送出後狀態');
+    assert(row.draft && row.final_reply !== row.draft, '原擬稿應保留，且與實際送出可對照');
+    assert(row.approved_by && row.sent_at, '應記錄複審人與送出時間');
+    // 回覆同步進個案訊息串
+    const msgs = await admin.ok('GET', `/api/messages?client_id=${clientId}`);
+    assert(msgs.some(m => m.content.includes('明天會由心理師與您聯繫')), '回覆應同步到個案訊息');
+    // 已送出的不可刪
+    await admin.fails('DELETE', `/api/inquiries/${inqId}`, undefined, '不可刪除');
+  });
+  await test('沒有主責心理師且未指定時，初審會被擋下', async () => {
+    const c = await admin.ok('POST', '/api/clients', { name: '冒煙無主責個案', phone: '0900000777' });
+    const r = await admin.ok('POST', '/api/inquiries', { client_id: c.id, raw_text: '想問問看諮商怎麼進行' });
+    await admin.fails('POST', `/api/inquiries/${r.id}/relay`, {}, '心理師');
+    await admin.ok('DELETE', `/api/inquiries/${r.id}`);
+  });
+  await test('AI 不代寫回覆：送出的內容必定來自人工擬稿', async () => {
+    const r = await admin.ok('POST', '/api/inquiries', { client_id: clientId, raw_text: '請問停車方便嗎' });
+    const row = (await admin.ok('GET', '/api/inquiries?status=new')).rows.find(x => x.id === r.id);
+    equal(row.draft, '', 'AI 初篩不應產生擬稿');
+    equal(row.final_reply, '', 'AI 初篩不應產生回覆');
+    assert(row.ai_category, '但應該要有分類');
+    await admin.ok('POST', `/api/inquiries/${r.id}/close`, { admin_note: '已於電話回覆' });
+    equal((await admin.ok('GET', '/api/inquiries?status=closed')).rows.find(x => x.id === r.id).status, 'closed', '結案');
+    await admin.ok('DELETE', `/api/inquiries/${r.id}`);
+  });
+  await test('搜尋、篩選與分頁可用', async () => {
+    const d = await admin.ok('GET', '/api/inquiries?status=all&q=活不下去&page=1&size=10');
+    assert(d.rows.length >= 1, '搜尋應命中');
+    const hi = await admin.ok('GET', '/api/inquiries?status=all&urgency=high');
+    assert(hi.rows.every(x => x.ai_urgency === 'high'), '急迫度篩選');
+    assert(typeof d.counts.new === 'number' && d.labels.sent, '應回傳統計與狀態字典');
+  });
+
   // ---------------------------------------------------------------- AI 助理
   section('AI 助理');
   await test('未設金鑰時停用，提問回明確錯誤', async () => {

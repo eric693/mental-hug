@@ -1,6 +1,7 @@
 const Anthropic = require('@anthropic-ai/sdk');
 const { db, getSetting, today, addDays } = require('./db');
 const { computeTiers, financeSummary } = require('./routes/insights');
+const { looksLikeReschedule } = require('./line');
 
 // AI 助理：讓所方用自然語言問後台資料（「這個月收多少」「誰快流失了」「林心理師下週幾個空檔」）。
 //
@@ -316,4 +317,84 @@ async function ask({ question, user, history = [] }) {
   return { answer: '查詢步驟過多，請把問題問得更具體一點。', tools_used: used };
 }
 
-module.exports = { ask, enabled, FIELD_GUIDE, TOOLS, MODEL };
+// ---- 個案訊息初篩（多層次人工審核的第一關）----
+// 只做分類、情緒標記與摘要，不代替任何人回覆、也不做臨床判斷。
+// 目的是讓行政人員一眼看出「哪一則要先處理」，而不是把判斷交給模型。
+//
+// AI 沒開或呼叫失敗時退回關鍵字規則：流程照跑，只是標籤粗一點。
+// 這一段刻意不讓 AI 生成要送給個案的內容——回覆一律由心理師擬、行政複審。
+
+const CRISIS_WORDS = ['自殺', '想死', '不想活', '結束生命', '自傷', '割腕', '傷害自己', '活不下去', '撐不下去'];
+const UPSET_WORDS = ['很生氣', '不滿', '投訴', '退費', '很失望', '太扯', '亂收費'];
+const ANXIOUS_WORDS = ['焦慮', '好緊張', '睡不著', '很慌', '恐慌', '好怕'];
+
+function ruleBasedTriage(text) {
+  const t = String(text || '');
+  const flags = CRISIS_WORDS.filter(w => t.includes(w));
+  const category = flags.length ? '危機疑慮'
+    : looksLikeReschedule(t) ? '預約異動'
+      : /費用|收費|發票|收據|匯款|付款/.test(t) ? '費用'
+        : /謝謝|感謝|收到/.test(t) ? '行政詢問' : '其他';
+  const sentiment = flags.length ? 'distress'
+    : UPSET_WORDS.some(w => t.includes(w)) ? 'upset'
+      : ANXIOUS_WORDS.some(w => t.includes(w)) ? 'anxious' : 'calm';
+  return {
+    category,
+    sentiment,
+    urgency: flags.length ? 'high' : sentiment === 'upset' ? 'high' : 'normal',
+    summary: t.slice(0, 60),
+    flags: flags.join('、'),
+    by: 'rule'
+  };
+}
+
+const TRIAGE_SYSTEM = `你是心理諮商所的訊息分流助手。所方會把個案在 LINE 官方帳號傳來的訊息交給你，
+你只做「分類與提醒」，不撰寫要回覆個案的內容，也不做任何臨床判斷或診斷。
+
+請輸出 JSON（不要有其他文字），欄位：
+{
+  "category": "預約異動｜費用｜情緒困擾｜行政詢問｜危機疑慮｜其他",
+  "sentiment": "calm｜anxious｜upset｜distress",
+  "urgency": "low｜normal｜high",
+  "summary": "20 字以內的中文摘要，讓行政人員一眼看懂",
+  "flags": "需要立刻注意的字眼（如自傷、自殺相關），沒有就空字串"
+}
+
+判斷原則：
+- 訊息出現自傷、自殺、活不下去等字眼，category 一律 "危機疑慮"、urgency "high"、flags 寫出該字眼。
+- 語氣明顯不滿或要求退費、投訴，sentiment 用 "upset"、urgency 至少 "high"。
+- 只是問時間、地點、費用這類事務性訊息，urgency 用 "low" 或 "normal"。
+- 個案表達難過、焦慮但沒有安全疑慮時，sentiment 用 "anxious" 或 "distress"，category 用 "情緒困擾"。`;
+
+async function triageMessage(text) {
+  const fallback = ruleBasedTriage(text);
+  if (!enabled()) return fallback;
+  try {
+    const client = new Anthropic({ apiKey: apiKey() });
+    const resp = await client.messages.create({
+      model: MODEL,
+      max_tokens: 600,
+      system: TRIAGE_SYSTEM,
+      messages: [{ role: 'user', content: String(text || '').slice(0, 1500) }]
+    });
+    const raw = resp.content.filter(b => b.type === 'text').map(b => b.text).join('').trim();
+    const json = raw.slice(raw.indexOf('{'), raw.lastIndexOf('}') + 1);
+    const out = JSON.parse(json);
+    // 安全網：AI 沒抓到但關鍵字有的危機字眼，一律以規則為準往上調
+    const merged = {
+      category: out.category || fallback.category,
+      sentiment: out.sentiment || fallback.sentiment,
+      urgency: out.urgency || fallback.urgency,
+      summary: String(out.summary || fallback.summary).slice(0, 100),
+      flags: out.flags || fallback.flags,
+      by: 'ai'
+    };
+    if (fallback.flags && !merged.flags) merged.flags = fallback.flags;
+    if (fallback.category === '危機疑慮') { merged.category = '危機疑慮'; merged.urgency = 'high'; }
+    return merged;
+  } catch (e) {
+    return { ...fallback, by: 'rule', error: String(e.message || e).slice(0, 120) };
+  }
+}
+
+module.exports = { ask, enabled, FIELD_GUIDE, TOOLS, MODEL, triageMessage, ruleBasedTriage };
