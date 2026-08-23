@@ -677,7 +677,26 @@ App.page('client', {
       }
 
       if (key === 'billing') {
-        body.innerHTML = `<div class="card"><h3>方案</h3>
+        const cprojects = await GET(`/clients/${c.id}/projects`).catch(() => []);
+        body.innerHTML = `<div class="card"><h3>機構專案額度</h3>
+            ${UI.table(['專案', '合約方', '案號', '核給', '已用', '剩餘', '期限', '收費', '狀態', ''],
+    cprojects.map(p => `<tr>
+              <td>${UI.esc(p.project_name)}</td>
+              <td class="wrap narrow">${UI.esc(p.contract_party || '-')}</td>
+              <td>${UI.esc(p.case_no || '-')}</td>
+              <td>${p.limit || '不限'}</td><td>${p.used_sessions}</td>
+              <td><strong>${p.remaining === null ? '不限' : p.remaining}</strong></td>
+              <td>${p.expire_date ? (p.expired ? `<span style="color:var(--danger)">${p.expire_date}（已到期）</span>` : p.expire_date) : '不限'}</td>
+              <td>${p.charge_client ? '個案自付' : '合約方支付'}</td>
+              <td>${p.status === 'active' ? UI.tag('可使用', 'ok') : UI.tag(p.status === 'used_up' ? '已用畢' : p.status, '')}</td>
+              <td style="white-space:nowrap"><button class="btn tiny secondary" data-cpe="${p.id}">編輯</button>
+                ${p.used_sessions ? '' : `<button class="btn tiny danger" data-cpd="${p.id}">刪除</button>`}</td></tr>`),
+    '此個案沒有專案額度')}
+            <button class="btn small" id="addcp" style="margin-top:10px">核給專案額度</button>
+            <div style="font-size:12.5px;color:var(--muted);margin-top:6px">
+              排預約時選了專案，系統會當場檢核餘量、期限與間隔天數；完成晤談才扣次。</div>
+          </div>
+          <div class="card"><h3>方案</h3>
             ${UI.table(['方案', '總次數', '已用', '剩餘', '金額', '到期', '狀態'], c.packages.map(p => `<tr>
               <td>${UI.esc(p.name)}</td><td>${p.sessions_total}</td><td>${p.sessions_used}</td>
               <td><strong>${p.sessions_total - p.sessions_used}</strong></td><td>${UI.fmtMoney(p.amount)}</td>
@@ -692,6 +711,47 @@ App.page('client', {
             <div style="font-size:12.5px;color:var(--muted);margin-top:6px">
               個案報稅、保險理賠或公司補助核銷時用：把選定期間內已收款的項目列成一張收據。</div></div>`;
         body.querySelector('#sumreceipt').onclick = () => receiptSummaryDialog(c);
+        body.querySelector('#addcp').onclick = async () => {
+          const list = await GET('/projects?active=1&size=300');
+          UI.modal({
+            title: '核給專案額度',
+            body: `<div class="form-grid">
+              ${UI.select('project_id', '專案', list.rows.map(p => [p.id,
+    `${p.name}${p.contract_party ? '｜' + p.contract_party : ''}（${UI.fmtMoney(p.price)}／次）`]), { full: true })}
+              ${UI.input('case_no', '委辦單位案號')}
+              ${UI.input('granted_sessions', '核給次數（留空沿用專案設定）', { type: 'number' })}
+              ${UI.input('start_date', '起始日', { type: 'date', value: UI.today() })}
+              ${UI.input('expire_date', '到期日（留空依專案月數推算）', { type: 'date' })}
+              ${UI.textarea('note', '備註')}</div>`,
+            onSubmit: async e => {
+              await POST(`/clients/${c.id}/projects`, UI.formData(e));
+              UI.toast('已核給');
+              tabsRefresh('billing');
+            }
+          });
+        };
+        body.querySelectorAll('[data-cpe]').forEach(b => {
+          const p = cprojects.find(x => x.id === Number(b.dataset.cpe));
+          b.onclick = () => UI.modal({
+            title: `編輯專案額度：${p.project_name}`,
+            body: `<div class="form-grid">
+              ${UI.input('granted_sessions', '核給次數', { type: 'number', value: p.granted_sessions })}
+              ${UI.input('case_no', '案號', { value: p.case_no })}
+              ${UI.input('start_date', '起始日', { type: 'date', value: p.start_date })}
+              ${UI.input('expire_date', '到期日', { type: 'date', value: p.expire_date })}
+              ${UI.select('status', '狀態', [['active', '可使用'], ['used_up', '已用畢'], ['expired', '已到期'], ['closed', '已結案']], { value: p.status })}
+              ${UI.textarea('note', '備註', { value: p.note })}</div>
+              <div style="font-size:12.5px;color:var(--muted);margin-top:8px">已使用 ${p.used_sessions} 次。</div>`,
+            onSubmit: async e => { await PUT(`/client-projects/${p.id}`, UI.formData(e)); UI.toast('已儲存'); tabsRefresh('billing'); }
+          });
+        });
+        body.querySelectorAll('[data-cpd]').forEach(b => {
+          b.onclick = async () => {
+            if (!await UI.confirm('刪除這筆專案額度？')) return;
+            try { await DEL(`/client-projects/${b.dataset.cpd}`); UI.toast('已刪除'); tabsRefresh('billing'); }
+            catch (e) { UI.err(e); }
+          };
+        });
       }
 
       if (key === 'summary') {

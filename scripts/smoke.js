@@ -1036,6 +1036,89 @@ function startServer() {
     await admin.fails('POST', '/api/nonclient-services/migrate', { client_id: clientId }, '對象單位');
   });
 
+  // ---------------------------------------------------------------- 機構專案
+  section('機構專案（額度、間隔、期限與對帳單）');
+  let projId, quotaId;
+  await test('建立專案與核給額度', async () => {
+    const p = await admin.ok('POST', '/api/projects', {
+      name: '冒煙市府補助方案', code: 'SMOKE-01', contract_party: '冒煙市政府社會局',
+      price: 1600, duration_min: 50, total_sessions: 2, interval_days: 7, valid_months: 6, charge_client: 0
+    });
+    projId = p.id;
+    await admin.fails('POST', '/api/projects', { name: '' }, '專案名稱');
+    const q = await admin.ok('POST', `/api/clients/${clientId}/projects`,
+      { project_id: projId, case_no: 'SC-2026-001', start_date: monday });
+    quotaId = q.id;
+    const list = await admin.ok('GET', `/api/clients/${clientId}/projects`);
+    const row = list.find(x => x.id === quotaId);
+    equal(row.remaining, 2, '核給後餘量');
+    assert(row.expire_date, '應依專案月數推算到期日');
+    equal(row.charge_client, 0, '不向個案收費');
+    // 同專案同案號不可重複核給
+    await admin.fails('POST', `/api/clients/${clientId}/projects`,
+      { project_id: projId, case_no: 'SC-2026-001' }, '已有');
+  });
+  await test('預約當下檢核：間隔天數、期限與餘量', async () => {
+    const d1 = addDays(monday, 84);
+    const a1 = await admin.ok('POST', '/api/appointments',
+      { client_id: clientId, counselor_id: 2, date: d1, start_time: '09:00', client_project_id: quotaId });
+    // 間隔 7 天內的第二次應被擋下
+    await admin.fails('POST', '/api/appointments',
+      { client_id: clientId, counselor_id: 2, date: addDays(d1, 3), start_time: '09:00', client_project_id: quotaId },
+      '間隔');
+    // 過期的額度不可用
+    await admin.ok('PUT', `/api/client-projects/${quotaId}`, { expire_date: '2000-01-01' });
+    await admin.fails('POST', '/api/appointments',
+      { client_id: clientId, counselor_id: 2, date: addDays(d1, 30), start_time: '09:00', client_project_id: quotaId },
+      '到期');
+    await admin.ok('PUT', `/api/client-projects/${quotaId}`, { expire_date: '' });
+    const chk = await admin.ok('GET', `/api/client-projects/${quotaId}/check?date=${addDays(d1, 30)}`);
+    equal(chk.ok, true, '恢復後應可用');
+    assert(a1.id, '');
+  });
+  await test('完成晤談扣額度並依專案單價開單；不向個案收費者記在專案名下', async () => {
+    const appts = await admin.ok('GET', `/api/appointments?client_id=${clientId}`);
+    const a = appts.find(x => x.client_project_id === quotaId && x.status === 'booked');
+    await admin.ok('POST', `/api/appointments/${a.id}/status`, { status: 'done' });
+    const q = (await admin.ok('GET', `/api/clients/${clientId}/projects`)).find(x => x.id === quotaId);
+    equal(q.used_sessions, 1, '應扣一次額度');
+    equal(q.remaining, 1, '餘量');
+    const inv = (await admin.ok('GET', `/api/invoices?client_id=${clientId}&status=`))
+      .rows.find(x => x.appointment_id === a.id);
+    assert(inv, '應開立收費單');
+    equal(inv.amount, 1600, '應依專案單價');
+    equal(inv.payer, '冒煙市府補助方案', '不向個案收費者付款人別記專案');
+    // 狀態回沖要退還額度
+    await admin.ok('POST', `/api/appointments/${a.id}/status`, { status: 'booked' });
+    equal((await admin.ok('GET', `/api/clients/${clientId}/projects`)).find(x => x.id === quotaId).used_sessions,
+      0, '回沖應退還額度');
+    await admin.ok('POST', `/api/appointments/${a.id}/status`, { status: 'done' });
+  });
+  await test('額度用畢後不可再排，狀態自動改為已用畢', async () => {
+    const d2 = addDays(monday, 120);
+    const a2 = await admin.ok('POST', '/api/appointments',
+      { client_id: clientId, counselor_id: 2, date: d2, start_time: '09:00', client_project_id: quotaId });
+    await admin.ok('POST', `/api/appointments/${a2.id}/status`, { status: 'done' });
+    const q = (await admin.ok('GET', `/api/clients/${clientId}/projects`)).find(x => x.id === quotaId);
+    equal(q.used_sessions, 2, '已用完');
+    equal(q.status, 'used_up', '狀態應自動改為已用畢');
+    await admin.fails('POST', '/api/appointments',
+      { client_id: clientId, counselor_id: 2, date: addDays(d2, 30), start_time: '09:00', client_project_id: quotaId },
+      '用畢');
+  });
+  await test('專案對帳單只列已完成的服務', async () => {
+    const month = addDays(monday, 84).slice(0, 7);
+    const st = await admin.ok('GET', `/api/projects/${projId}/statement?month=${month}`);
+    assert(st.rows.every(r => r.status === 'done'), '只列已完成');
+    equal(st.summary.amount, st.rows.length * 1600, '請款金額＝次數 × 單價');
+    equal(st.summary.charge_client, false, '應標示由合約方支付');
+  });
+  await test('已核給的專案不可刪除，改為停用；使用過的額度不可刪', async () => {
+    const out = await admin.ok('DELETE', `/api/projects/${projId}`);
+    equal(out.disabled, true, '已核給個案的專案應改停用');
+    await admin.fails('DELETE', `/api/client-projects/${quotaId}`, undefined, '已使用');
+  });
+
   // ---------------------------------------------------------------- 分帳引擎
   section('分帳引擎（規則版本化、模擬器、月結）');
   let ruleId, defaultRuleId;

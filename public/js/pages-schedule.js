@@ -9,7 +9,12 @@ async function apptDialog(appt, onDone, defaults) {
     ...(defaults || {})
   };
   let packages = [];
-  if (a.client_id) packages = await GET(`/clients/${a.client_id}/active-packages`).catch(() => []);
+  let cprojects = [];
+  if (a.client_id) {
+    packages = await GET(`/clients/${a.client_id}/active-packages`).catch(() => []);
+    cprojects = (await GET(`/clients/${a.client_id}/projects`).catch(() => []))
+      .filter(p => p.status === 'active' && !p.expired);
+  }
   UI.modal({
     title: isNew ? '新增預約' : '修改預約',
     wide: true,
@@ -23,6 +28,10 @@ async function apptDialog(appt, onDone, defaults) {
       ${UI.select('room_id', '諮商室', App.roomOptions(), { value: a.room_id || '' })}
       ${UI.input('fee', '費用', { type: 'number', value: a.fee !== undefined ? a.fee : (App.meta.default_fee || 2000) })}
       ${UI.select('package_id', '扣抵方案', [['', '不扣抵（單次收費）']].concat(packages.map(p => [p.id, `${p.name}（剩 ${p.remaining} 次）`])), { value: a.package_id || '' })}
+      ${UI.select('client_project_id', '機構專案（選了就依專案計價並扣額度）',
+    [['', '不使用專案']].concat(cprojects.map(p => [p.id,
+      `${p.project_name}${p.case_no ? '／' + p.case_no : ''}（剩 ${p.remaining === null ? '不限' : p.remaining} 次，${UI.fmtMoney(p.price)}）`])),
+  { value: a.client_project_id || '', full: true })}
       ${UI.checkbox('designated', '個案指名這位心理師（影響分帳規則與指名預約比例）', !!a.designated)}
       <div class="form-row full" id="mu-row" style="${a.mode === 'online' ? '' : 'display:none'}">
         <label>視訊連結</label>

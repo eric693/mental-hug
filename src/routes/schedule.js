@@ -3,6 +3,7 @@ const { db, audit, today, getSetting, addDays, nowStamp } = require('../db');
 const { requireStaff } = require('../auth');
 const { sendNotification } = require('../notify');
 const { ensureToken, resetToken } = require('../ics');
+const projects = require('./projects');
 
 const router = express.Router();
 
@@ -111,6 +112,13 @@ router.post('/appointments', requireStaff('schedule'), (req, res) => {
   if (!client) return res.status(400).json({ error: '請選擇個案' });
   if (!b.counselor_id) return res.status(400).json({ error: '請選擇心理師' });
   if (!b.date || !b.start_time) return res.status(400).json({ error: '請填寫日期與時間' });
+  // 專案額度在排預約的當下就檢核：等到月底請款才發現超額，錢已經收不回來
+  let projectWarn = '';
+  if (b.client_project_id) {
+    const chk = projects.checkQuota(Number(b.client_project_id), b.date);
+    if (!chk.ok) return res.status(400).json({ error: chk.reason });
+    projectWarn = chk.warn || '';
+  }
   const end_time = b.end_time || endTime(b.start_time, getSetting('session_minutes', '50'));
   const hit = conflictOf({ ...b, end_time });
   if (hit) {
@@ -134,12 +142,12 @@ router.post('/appointments', requireStaff('schedule'), (req, res) => {
     ? Number(b.fee)
     : Number(getSetting(b.type === 'intake' ? 'intake_fee' : 'default_fee', '2000'));
   const info = db.prepare(`INSERT INTO appointments
-    (client_id, counselor_id, room_id, date, start_time, end_time, type, mode, status, fee, package_id, source, note, meeting_url, site_id, designated, created_by)
-    VALUES (?,?,?,?,?,?,?,?,'booked',?,?,?,?,?,?,?,?)`).run(
+    (client_id, counselor_id, room_id, date, start_time, end_time, type, mode, status, fee, package_id, source, note, meeting_url, site_id, designated, client_project_id, created_by)
+    VALUES (?,?,?,?,?,?,?,?,'booked',?,?,?,?,?,?,?,?,?)`).run(
     client.id, Number(b.counselor_id), Number(b.room_id) || null, b.date, b.start_time, end_time,
     b.type || 'individual', b.mode || 'onsite', fee, Number(b.package_id) || null,
     b.source || 'staff', b.note || '', meeting_url, siteOfRoom(b.room_id, b.counselor_id),
-    b.designated ? 1 : 0, req.user.id);
+    b.designated ? 1 : 0, Number(b.client_project_id) || null, req.user.id);
   audit('staff', req.user.id, req.user.name, '新增預約', client.code, { date: b.date, time: b.start_time });
   res.json({ id: info.lastInsertRowid });
 });
@@ -193,6 +201,12 @@ router.post('/appointments/:id/status', requireStaff('schedule'), (req, res) => 
       db.prepare(`UPDATE packages SET status = 'active'
         WHERE id = ? AND status = 'used_up' AND sessions_used < sessions_total`).run(a.package_id);
     }
+    if (a.client_project_id) {
+      db.prepare('UPDATE client_projects SET used_sessions = MAX(used_sessions - 1, 0) WHERE id = ?')
+        .run(a.client_project_id);
+      db.prepare(`UPDATE client_projects SET status = 'active' WHERE id = ? AND status = 'used_up'`)
+        .run(a.client_project_id);
+    }
     const autos = db.prepare("SELECT * FROM invoices WHERE appointment_id = ? AND status != 'void'").all(a.id);
     for (const inv of autos) {
       // 已收款或已退費的單都動不得（都代表金流已經發生過），只出警示請人工處理
@@ -212,6 +226,26 @@ router.post('/appointments/:id/status', requireStaff('schedule'), (req, res) => 
         // 由方案扣次；扣完自動標記用畢
         db.prepare('UPDATE packages SET sessions_used = sessions_used + 1 WHERE id = ?').run(a.package_id);
         db.prepare(`UPDATE packages SET status = 'used_up' WHERE id = ? AND sessions_used >= sessions_total`).run(a.package_id);
+      } else if (a.client_project_id) {
+        // 機構專案：扣一次額度，並依專案單價開單。
+        // 不向個案收費的專案，收費單記在專案名下供月結請款，個案端看不到欠款。
+        const cp = db.prepare(`SELECT cp.*, p.name AS project_name, p.price, p.charge_client, p.id AS pid
+          FROM client_projects cp JOIN projects p ON p.id = cp.project_id WHERE cp.id = ?`).get(a.client_project_id);
+        if (cp) {
+          db.prepare('UPDATE client_projects SET used_sessions = used_sessions + 1 WHERE id = ?').run(cp.id);
+          const limit = cp.granted_sessions || 0;
+          if (limit && cp.used_sessions + 1 >= limit) {
+            db.prepare("UPDATE client_projects SET status = 'used_up' WHERE id = ?").run(cp.id);
+          }
+          if (cp.price > 0) {
+            db.prepare(`INSERT INTO invoices (client_id, appointment_id, date, item, amount, status, payer,
+                project_id, client_project_id, note)
+              VALUES (?,?,?,?,?, 'unpaid', ?, ?, ?, ?)`).run(
+              a.client_id, a.id, a.date, `${a.date} ${cp.project_name}`, cp.price,
+              cp.charge_client ? getSetting('payer_type_default', '自費') : cp.project_name,
+              cp.pid, cp.id, cp.charge_client ? '' : '由專案合約方支付，不向個案收費');
+          }
+        }
       } else if (a.fee > 0) {
         db.prepare(`INSERT INTO invoices (client_id, appointment_id, date, item, amount, status, payer)
                     VALUES (?,?,?,?,?, 'unpaid', ?)`).run(

@@ -314,6 +314,48 @@ ensureColumns('session_notes', {
   record_type: "TEXT NOT NULL DEFAULT 'individual'"
 });
 
+// ---- 機構專案（M7）----
+// 警政、衛生局補助、EAP、婦女支持中心……各有價格、時長、可用次數與使用期限，
+// 而且多半「不向個案收費」，帳要跟合約方請款。專案是分帳與請款的共同前提。
+db.exec(`CREATE TABLE IF NOT EXISTS projects (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  code TEXT NOT NULL DEFAULT '',
+  name TEXT NOT NULL,
+  contract_party TEXT NOT NULL DEFAULT '',     -- 合約方（委辦單位）
+  contact TEXT NOT NULL DEFAULT '',
+  price INTEGER NOT NULL DEFAULT 0,            -- 單次價格
+  duration_min INTEGER NOT NULL DEFAULT 50,
+  interval_days INTEGER NOT NULL DEFAULT 0,    -- 兩次之間至少間隔幾天（0＝不限）
+  valid_months INTEGER NOT NULL DEFAULT 0,     -- 核給後可用幾個月（0＝不限）
+  total_sessions INTEGER NOT NULL DEFAULT 0,   -- 每位個案可用總次數（0＝不限）
+  charge_client INTEGER NOT NULL DEFAULT 0,    -- 是否向個案收費（0＝不收，向合約方請款）
+  note TEXT NOT NULL DEFAULT '',
+  active INTEGER NOT NULL DEFAULT 1,
+  created_at TEXT NOT NULL DEFAULT (datetime('now','localtime'))
+);
+CREATE TABLE IF NOT EXISTS client_projects (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  client_id INTEGER NOT NULL REFERENCES clients(id) ON DELETE CASCADE,
+  project_id INTEGER NOT NULL REFERENCES projects(id),
+  granted_sessions INTEGER NOT NULL DEFAULT 0, -- 核給次數（0＝沿用專案設定）
+  used_sessions INTEGER NOT NULL DEFAULT 0,
+  start_date TEXT NOT NULL DEFAULT '',
+  expire_date TEXT NOT NULL DEFAULT '',
+  case_no TEXT NOT NULL DEFAULT '',            -- 委辦單位的案號
+  status TEXT NOT NULL DEFAULT 'active',       -- active / used_up / expired / closed
+  note TEXT NOT NULL DEFAULT '',
+  created_at TEXT NOT NULL DEFAULT (datetime('now','localtime')),
+  UNIQUE(client_id, project_id, case_no)
+);
+CREATE INDEX IF NOT EXISTS idx_cp_client ON client_projects(client_id, status);`);
+ensureColumns('appointments', {
+  client_project_id: 'INTEGER REFERENCES client_projects(id)'
+});
+ensureColumns('invoices', {
+  project_id: 'INTEGER REFERENCES projects(id)',
+  client_project_id: 'INTEGER REFERENCES client_projects(id)'
+});
+
 // ---- 分帳引擎（M6）----
 // 一條規則可以改很多次，但「已經拆過的帳不能被今天改的規則動到」，
 // 所以規則本身只是個殼，實際條件與比例放在版本裡；每一筆拆帳都鎖住當時的版本 id。
