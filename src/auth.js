@@ -23,6 +23,7 @@ const MODULES = [
   { key: 'payouts', label: '報酬與扣繳' },
   { key: 'messages', label: '個案訊息' },
   { key: 'line', label: 'LINE 傳話與改期簽核' },
+  { key: 'ai', label: 'AI 助理' },
   { key: 'announcements', label: '公告' },
   { key: 'reports', label: '統計報表' },
   { key: 'users', label: '帳號權限' },
@@ -46,9 +47,9 @@ function featureOn(key) { return getSetting('feature_' + key, '1') === '1'; }
 
 // 行政人員預設不含晤談紀錄與危機事件（保密考量），建立帳號時可再調整
 const ROLE_DEFAULT_MODULES = {
-  counselor: ['schedule', 'intake', 'clients', 'groups', 'notes', 'plans', 'assessments', 'risk', 'supervision', 'consents', 'hr', 'messages', 'announcements', 'reports', 'line'],
-  supervisor: ['schedule', 'intake', 'clients', 'groups', 'notes', 'plans', 'assessments', 'risk', 'supervision', 'consents', 'hr', 'messages', 'announcements', 'reports', 'line'],
-  staff: ['schedule', 'intake', 'clients', 'groups', 'assessments', 'consents', 'billing', 'partners', 'messages', 'announcements', 'line']
+  counselor: ['schedule', 'intake', 'clients', 'groups', 'notes', 'plans', 'assessments', 'risk', 'supervision', 'consents', 'hr', 'messages', 'announcements', 'reports', 'line', 'ai'],
+  supervisor: ['schedule', 'intake', 'clients', 'groups', 'notes', 'plans', 'assessments', 'risk', 'supervision', 'consents', 'hr', 'messages', 'announcements', 'reports', 'line', 'ai'],
+  staff: ['schedule', 'intake', 'clients', 'groups', 'assessments', 'consents', 'billing', 'partners', 'messages', 'announcements', 'line', 'ai']
 };
 
 // 登入暴力嘗試防護：同一帳號連續失敗 5 次鎖定 15 分鐘

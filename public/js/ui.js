@@ -158,7 +158,7 @@ const UI = {
     const pts = rows.map((r, i) => `${x(i).toFixed(1)},${y(r.total).toFixed(1)}`).join(' ');
     const dots = rows.map((r, i) => `
       <circle cx="${x(i).toFixed(1)}" cy="${y(r.total).toFixed(1)}" r="${r.alert ? 5 : 4}"
-        fill="${r.alert ? '#d9534f' : (opts.color || '#0e7c7b')}"></circle>
+        fill="${r.alert ? '#d9534f' : (opts.color || '#4e5556')}"></circle>
       <text x="${x(i).toFixed(1)}" y="${(y(r.total) - 9).toFixed(1)}" text-anchor="middle" font-size="11" fill="#3b4a55">${r.total}</text>
       <text x="${x(i).toFixed(1)}" y="${H - 12}" text-anchor="middle" font-size="10" fill="#8b97a2">${UI.esc(r.date.slice(5))}</text>`).join('');
     return `<div class="table-wrap"><svg viewBox="0 0 ${W} ${H}" style="width:100%;min-width:420px;height:auto" role="img">
@@ -167,7 +167,7 @@ const UI = {
       <text x="${padL - 6}" y="${padT + 4}" text-anchor="end" font-size="10" fill="#8b97a2">${max}</text>
       <text x="${padL - 6}" y="${H - padB}" text-anchor="end" font-size="10" fill="#8b97a2">0</text>
       ${lines}
-      <polyline points="${pts}" fill="none" stroke="${opts.color || '#0e7c7b'}" stroke-width="2"></polyline>
+      <polyline points="${pts}" fill="none" stroke="${opts.color || '#4e5556'}" stroke-width="2"></polyline>
       ${dots}
     </svg></div>`;
   },
@@ -179,7 +179,7 @@ const UI = {
     const list = (rows || []).filter(r => r);
     if (!list.length) return `<div class="empty">${UI.esc(opts.empty || '目前沒有資料')}</div>`;
     const fmt = opts.format || (v => String(v));
-    const color = opts.color || '#0e7c7b';
+    const color = opts.color || '#4e5556';
     const max = Math.max(1, ...list.map(r => Number(r.value) || 0));
 
     if (opts.horizontal) {
@@ -272,6 +272,10 @@ const TW = {
   appt_mode: { onsite: '到所', online: '視訊' },
   appt_status: { booked: '已預約', arrived: '已報到', done: '已完成', cancelled: '已取消', no_show: '未到' },
   risk_flag: { none: '無', ideation: '有意念', plan: '有計畫', attempt: '有行為' },
+  record_type: {
+    individual: '個案晤談', group: '團體', assessment: '心理衡鑑',
+    outreach_talk: '外派演講', lecture: '講座課程', other: '其他非個案服務'
+  },
   severity: { low: '低', medium: '中', high: '高' },
   event_status: { open: '追蹤中', closed: '已結案' },
   plan_status: { active: '執行中', achieved: '目標達成', revised: '已修訂', closed: '已結束' },

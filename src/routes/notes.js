@@ -1,6 +1,6 @@
 const express = require('express');
 const { db, audit, today, nowStamp, getSetting } = require('../db');
-const { requireStaff, requireNoteAccess, canViewNote, isSupervisorOf } = require('../auth');
+const { requireStaff, requireNoteAccess, canViewNote, isSupervisorOf, clientIp } = require('../auth');
 
 const router = express.Router();
 
@@ -88,6 +88,161 @@ router.get('/notes/:id/print', requireStaff('notes'), (req, res) => {
     center_address: getSetting('center_address'),
     center_license_no: getSetting('center_license_no'),
     center_director: getSetting('center_director')
+  });
+});
+
+// ---- 批次列印（M8-05～11）----
+// 批次列印一次把多筆心理紀錄輸出成紙本，等同特種個資的大量匯出，
+// 因此不是「多一個按鈕」而已：用途必填、留不可修改的批次軌跡、每頁浮水印、
+// 異常樣態主動示警。這些是規格明訂不可延後的部分。
+
+const PRINT_PURPOSES = ['督考', '司法調閱', '個案申請', '內部歸檔', '其他'];
+const BATCH_BG_THRESHOLD = 50;     // 超過此筆數轉背景工作（M8-11）
+
+function nextBatchNo() {
+  const day = today().replace(/-/g, '');
+  const row = db.prepare("SELECT batch_no FROM print_batches WHERE batch_no LIKE ? ORDER BY batch_no DESC LIMIT 1")
+    .get(`PB-${day}-%`);
+  const seq = row ? Number(row.batch_no.slice(-4)) + 1 : 1;
+  return `PB-${day}-${String(seq).padStart(4, '0')}`;
+}
+
+// 依篩選條件解出要印哪些紀錄。ids 優先；否則以個案／日期／心理師／類型篩選。
+// 這個函式同時服務「預覽數量」與「實際列印」，兩邊看到的 N 必然一致（反向選取要靠它）。
+function resolveNotes(filters) {
+  const f = filters || {};
+  if (Array.isArray(f.ids) && f.ids.length) {
+    const ids = f.ids.map(Number).filter(Boolean).slice(0, 500);
+    if (!ids.length) return [];
+    return db.prepare(`SELECT * FROM session_notes WHERE id IN (${ids.map(() => '?').join(',')})
+      ORDER BY client_id, date, session_no`).all(...ids);
+  }
+  const where = [], args = [];
+  if (f.client_id) { where.push('client_id = ?'); args.push(Number(f.client_id)); }
+  if (f.counselor_id) { where.push('counselor_id = ?'); args.push(Number(f.counselor_id)); }
+  if (f.record_type) { where.push('record_type = ?'); args.push(String(f.record_type)); }
+  if (f.from) { where.push('date >= ?'); args.push(String(f.from).slice(0, 10)); }
+  if (f.to) { where.push('date <= ?'); args.push(String(f.to).slice(0, 10)); }
+  if (!where.length) return [];
+  return db.prepare(`SELECT * FROM session_notes WHERE ${where.join(' AND ')}
+    ORDER BY client_id, date, session_no LIMIT 500`).all(...args);
+}
+
+// 目前篩選條件下「我看得到幾筆」——反向選取與「全選全部結果（N）」都以這個數字為準
+router.post('/notes/print-scope', requireStaff('notes'), (req, res) => {
+  const rows = resolveNotes(req.body || {});
+  const visible = rows.filter(n => canViewNote(req.user, n));
+  res.json({
+    total: visible.length,
+    hidden: rows.length - visible.length,
+    ids: visible.map(n => n.id),
+    background: visible.length > BATCH_BG_THRESHOLD,
+    threshold: BATCH_BG_THRESHOLD,
+    purposes: PRINT_PURPOSES
+  });
+});
+
+// 異常樣態（M8-10）：不阻擋，但要讓管理者看得到
+function batchAnomalies(user) {
+  const out = [];
+  const dayCount = db.prepare(`SELECT COALESCE(SUM(count),0) n FROM print_batches
+    WHERE user_id = ? AND substr(created_at,1,10) = ?`).get(user.id, today()).n;
+  const limit = Number(getSetting('print_batch_daily_limit', '100'));
+  if (dayCount > limit) out.push(`今日已批次列印 ${dayCount} 筆，超過所內門檻 ${limit} 筆`);
+  const hour = new Date().getHours();
+  const [openH, closeH] = getSetting('office_hours', '08:00-21:00').split('-')
+    .map(t => Number(String(t).slice(0, 2)));
+  if (hour < openH || hour >= closeH) out.push(`於非上班時段（${String(hour).padStart(2, '0')} 時）執行批次列印`);
+  const recent = db.prepare(`SELECT COUNT(*) n FROM print_batches
+    WHERE user_id = ? AND created_at >= datetime('now','localtime','-1 hour')`).get(user.id).n;
+  if (recent >= 3) out.push(`一小時內已執行 ${recent} 次批次列印`);
+  return out;
+}
+
+router.post('/notes/print-batch', requireStaff('notes'), (req, res) => {
+  const b2 = req.body || {};
+  const purpose = String(b2.purpose || '').trim();
+  if (!PRINT_PURPOSES.includes(purpose)) {
+    return res.status(400).json({ error: `請選擇列印用途（${PRINT_PURPOSES.join('／')}）` });
+  }
+  if (purpose === '其他' && !String(b2.purpose_note || '').trim()) {
+    return res.status(400).json({ error: '用途選「其他」時請說明' });
+  }
+  const rows = resolveNotes(b2);
+  if (!rows.length) return res.status(400).json({ error: '沒有符合條件的紀錄' });
+
+  const out = [];
+  let skipped = 0;
+  for (const n of rows) {
+    if (!canViewNote(req.user, n)) { skipped++; continue; }
+    const extra = db.prepare(`SELECT u.name AS counselor_name, u.license_type, u.license_no,
+        c.name AS client_name, c.code AS client_code, c.birth_date, c.gender,
+        a.start_time, a.end_time, a.type AS appt_type, a.mode
+      FROM session_notes n
+      LEFT JOIN users u ON u.id = n.counselor_id
+      LEFT JOIN clients c ON c.id = n.client_id
+      LEFT JOIN appointments a ON a.id = n.appointment_id
+      WHERE n.id = ?`).get(n.id);
+    out.push({ ...n, ...extra });
+  }
+  if (!out.length) return res.status(403).json({ error: '這些紀錄都不在您的存取範圍內' });
+
+  const batchNo = nextBatchNo();
+  const background = out.length > BATCH_BG_THRESHOLD;
+  db.prepare(`INSERT INTO print_batches (batch_no, user_id, user_name, purpose, purpose_note,
+      filters, note_ids, count, skipped, mode, status, ip)
+    VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`).run(
+    batchNo, req.user.id, req.user.name, purpose, String(b2.purpose_note || '').slice(0, 200),
+    JSON.stringify({ ...b2, ids: undefined }), JSON.stringify(out.map(n => n.id)),
+    out.length, skipped, b2.mode === 'split' ? 'split' : 'merged',
+    background ? 'queued' : 'done', clientIp(req));
+  // 每一筆都各自留調閱軌跡，跟單筆列印一致
+  for (const n of out) {
+    audit('staff', req.user.id, req.user.name, '批次列印晤談紀錄', n.client_code || '',
+      { note_id: n.id, batch_no: batchNo, purpose });
+  }
+  audit('staff', req.user.id, req.user.name, '建立列印批次', batchNo,
+    { count: out.length, purpose, skipped });
+
+  res.json({
+    batch_no: batchNo,
+    rows: out,
+    skipped,
+    background,
+    anomalies: batchAnomalies(req.user),
+    purpose,
+    purpose_note: String(b2.purpose_note || ''),
+    printed_by: req.user.name,
+    printed_at: nowStamp(),
+    center_name: getSetting('center_name'),
+    center_phone: getSetting('center_phone'),
+    center_address: getSetting('center_address'),
+    center_license_no: getSetting('center_license_no'),
+    center_director: getSetting('center_director')
+  });
+});
+
+// 背景批次完成回報（前端把大批列印畫完後回呼，用於 M8-11 的「完成後通知」）
+router.post('/print-batches/:batch/done', requireStaff('notes'), (req, res) => {
+  const row = db.prepare('SELECT * FROM print_batches WHERE batch_no = ?').get(req.params.batch);
+  if (!row) return res.status(404).json({ error: '找不到此批次' });
+  if (row.user_id !== req.user.id && req.user.role !== 'admin') {
+    return res.status(403).json({ error: '只有建立者或管理者可更新此批次' });
+  }
+  db.prepare("UPDATE print_batches SET status = 'done' WHERE id = ?").run(row.id);
+  res.json({ ok: true });
+});
+
+// 批次列印軌跡：不提供修改與刪除端點，只能查
+router.get('/print-batches', requireStaff('notes'), (req, res) => {
+  const mine = req.user.role === 'admin' || req.user.role === 'supervisor' ? '' : 'WHERE user_id = ?';
+  const args = mine ? [req.user.id] : [];
+  const rows = db.prepare(`SELECT * FROM print_batches ${mine} ORDER BY id DESC LIMIT 200`).all(...args);
+  res.json({
+    rows: rows.map(r => ({ ...r, filters: JSON.parse(r.filters || '{}'), note_ids: JSON.parse(r.note_ids || '[]') })),
+    purposes: PRINT_PURPOSES,
+    daily_limit: Number(getSetting('print_batch_daily_limit', '100')),
+    anomalies: batchAnomalies(req.user)
   });
 });
 

@@ -382,10 +382,19 @@ App.page('client', {
 
       if (key === 'notes') {
         const notes = await GET(`/clients/${c.id}/notes`);
-        body.innerHTML = `<div class="card">
+        body.innerHTML = `<div class="toolbar" style="flex-wrap:wrap;gap:8px">
+            <button class="btn tiny secondary" id="nall">全選本頁（${notes.length}）</button>
+            <button class="btn tiny secondary" id="ninv">反向選取</button>
+            <button class="btn tiny secondary" id="nnone">取消全選</button>
+            <span id="ncount" style="font-size:12.5px;color:var(--muted)">已選 0 筆</span>
+            <div class="spacer"></div>
+            <button class="btn small secondary" id="nbatch">批次列印勾選的紀錄</button>
+            <button class="btn small secondary" id="nrange">依條件列印（跨頁全部結果）</button></div>
+          <div class="card">
           <div style="font-size:12.5px;color:var(--muted);margin-bottom:10px">
             每次調閱皆記入稽核軌跡。紀錄簽核後不可修改。</div>
-          ${UI.table(['次數', '日期', '心理師', '風險', '狀態', ''], notes.map(n => `<tr>
+          ${UI.table(['', '次數', '日期', '心理師', '風險', '狀態', ''], notes.map(n => `<tr>
+            <td><input type="checkbox" class="nsel" value="${n.id}"></td>
             <td>第 ${n.session_no} 次</td><td>${n.date}</td><td>${UI.esc(n.counselor_name || '')}</td>
             <td>${stateTag('risk_flag', n.risk_flag)}</td>
             <td>${n.locked ? UI.tag(n.review_status === 'approved' ? '已覆核定稿' : '已簽核', 'ok')
@@ -403,6 +412,23 @@ App.page('client', {
         body.querySelectorAll('[data-np]').forEach(b => {
           b.onclick = () => notePrint(Number(b.dataset.np));
         });
+        const boxes = () => [...body.querySelectorAll('.nsel')];
+        const refreshCount = () => {
+          body.querySelector('#ncount').textContent = `已選 ${boxes().filter(x => x.checked).length} 筆`;
+        };
+        body.querySelector('#nall').onclick = () => { boxes().forEach(x => { x.checked = true; }); refreshCount(); };
+        body.querySelector('#nnone').onclick = () => { boxes().forEach(x => { x.checked = false; }); refreshCount(); };
+        // 反向選取：已勾選的變未勾選，其餘變已勾選（範圍＝目前篩選結果，本頁即全部）
+        body.querySelector('#ninv').onclick = () => { boxes().forEach(x => { x.checked = !x.checked; }); refreshCount(); };
+        boxes().forEach(x => { x.onchange = refreshCount; });
+        refreshCount();
+
+        body.querySelector('#nbatch').onclick = () => {
+          const ids = boxes().filter(x => x.checked).map(x => Number(x.value));
+          if (!ids.length) return UI.toast('請先勾選要列印的紀錄', true);
+          printBatchDialog({ ids });
+        };
+        body.querySelector('#nrange').onclick = () => printBatchDialog({ client_id: c.id }, notes);
         body.querySelectorAll('[data-ndel]').forEach(b => {
           b.onclick = async () => {
             if (!await UI.confirm('刪除這筆晤談紀錄草稿？不可復原。')) return;
@@ -792,4 +818,123 @@ function showReceiptSummary(r) {
     </div>
     <button class="btn small secondary no-print" style="margin-top:14px" onclick="window.print()">列印</button>`
   });
+}
+
+// ---- 諮商紀錄批次列印（M8-05～11）----
+// 列印前先確認範圍與用途：批次列印是特種個資的大量匯出，
+// 用途必填、每頁有浮水印、每一批都留不可修改的軌跡。
+
+const PRINT_PURPOSES = ['督考', '司法調閱', '個案申請', '內部歸檔', '其他'];
+
+async function printBatchDialog(filters, notesForDefault) {
+  // 先問後端「這個條件下我看得到幾筆」，畫面上的 N 與實際列印的 N 保證一致
+  let scope;
+  try { scope = await POST('/notes/print-scope', filters); } catch (e) { return UI.err(e); }
+  const byRange = !filters.ids;
+  const first = notesForDefault && notesForDefault.length
+    ? notesForDefault[notesForDefault.length - 1].date : UI.today();
+
+  UI.modal({
+    title: '批次列印諮商紀錄',
+    wide: true,
+    submitText: '產生列印批次',
+    body: `
+      ${byRange ? `<div class="form-grid">
+        ${UI.input('from', '起始日', { type: 'date', value: first })}
+        ${UI.input('to', '結束日', { type: 'date', value: UI.today() })}
+        ${UI.select('record_type', '紀錄類型', [['', '全部'], ['individual', '個案晤談'],
+    ['group', '團體'], ['assessment', '心理衡鑑']])}
+      </div>` : `<div class="notice" style="margin-bottom:10px">已勾選 <strong>${filters.ids.length}</strong> 筆。</div>`}
+      <div class="form-grid">
+        ${UI.select('purpose', '列印用途（必填，會記入批次軌跡）', PRINT_PURPOSES.map(p => [p, p]))}
+        ${UI.input('purpose_note', '用途說明（選「其他」時必填）', { full: true })}
+        ${UI.select('mode', '輸出方式', [['merged', '合併為一份（每筆各自分頁）'], ['split', '分檔（逐筆各自列印）']])}
+      </div>
+      <div id="scope-info" style="font-size:13px;color:var(--muted);margin-top:10px">
+        目前條件下您可調閱 <strong>${scope.total}</strong> 筆${scope.hidden ? `（另有 ${scope.hidden} 筆不在您的權限範圍，不會列入）` : ''}。
+        ${scope.background ? `<br><span style="color:var(--warn,#b7791f)">超過 ${scope.threshold} 筆，會轉為背景產生，完成後通知。</span>` : ''}
+      </div>
+      <div class="notice warn" style="margin-top:10px">
+        每一頁都會印上列印者、時間與批次編號的浮水印（不可關閉），批次紀錄無法修改或刪除。</div>`,
+    onSubmit: async e => {
+      const d = UI.formData(e);
+      if (d.purpose === '其他' && !d.purpose_note) { UI.toast('用途選「其他」時請說明', true); return false; }
+      const payload = { ...filters, ...d };
+      const out = await POST('/notes/print-batch', payload);
+      notesBatchPrint(out);
+    }
+  });
+}
+
+function notesBatchPrint(d) {
+  const field = (label, value) => `<div class="doc-field"><span>${UI.esc(label)}</span><span>${UI.esc(value || '-')}</span></div>`;
+  const section = (label, value) => `<div class="doc-section"><h4>${UI.esc(label)}</h4>
+    <div class="body">${UI.esc(value || '（未填）')}</div></div>`;
+  // 浮水印：列印者、時間、批次編號。放在每一份紀錄上，列印時每頁都看得到。
+  const mark = `${d.printed_by}　${d.printed_at}　${d.batch_no}`;
+  const one = (n, i) => `<div class="print-doc${i ? ' page-break' : ''}">
+      <div class="doc-title">心理諮商紀錄</div>
+      <div class="doc-org">${UI.esc(d.center_name)}
+        ${d.center_license_no ? '　開業執照字號：' + UI.esc(d.center_license_no) : ''}
+        ${d.center_phone ? '　' + UI.esc(d.center_phone) : ''}</div>
+      ${field('個案編號', n.client_code)}
+      ${field('個案姓名', n.client_name)}
+      ${field('紀錄類型', TW.record_type[n.record_type] || '個案晤談')}
+      ${field('晤談日期', `${n.date}${n.start_time ? `　${n.start_time}-${n.end_time}` : ''}　（第 ${n.session_no} 次，${n.duration_min} 分鐘）`)}
+      ${field('心理師', `${n.counselor_name || ''}${n.license_type ? `（${n.license_type}${n.license_no ? ' 證書字號 ' + n.license_no : ''}）` : ''}`)}
+      ${section('主觀陳述（S）', n.subjective)}
+      ${section('客觀觀察（O）', n.objective)}
+      ${section('評估與概念化（A）', n.assessment)}
+      ${section('處遇計畫（P）', n.plan)}
+      ${n.intervention ? section('介入技術／取向', n.intervention) : ''}
+      ${n.homework ? section('家庭作業', n.homework) : ''}
+      ${n.risk_flag && n.risk_flag !== 'none'
+    ? section('風險評估', `${TW.risk_flag[n.risk_flag] || n.risk_flag}\n${n.risk_note || ''}`) : ''}
+      <div class="doc-foot">
+        紀錄狀態：${n.locked ? `已簽核定稿（${UI.esc(n.signed_at || '')}）` : '草稿，尚未簽核'}
+        ${n.review_status === 'approved' ? '；已經督導覆核' : ''}　第 ${i + 1} / ${d.rows.length} 份<br>
+        批次編號：${UI.esc(d.batch_no)}　用途：${UI.esc(d.purpose)}${d.purpose_note ? '（' + UI.esc(d.purpose_note) + '）' : ''}<br>
+        列印人：${UI.esc(d.printed_by)}　列印時間：${UI.esc(d.printed_at)}<br>
+        本紀錄屬《心理師法》規範之業務紀錄，僅限法定用途使用，不得任意複製或轉交第三人。
+      </div>
+      <div style="margin-top:22px">心理師簽章：＿＿＿＿＿＿＿＿　　（諮商所用印）</div>
+    </div>`;
+
+  const m = UI.modal({
+    title: `批次列印 ${d.batch_no}（${d.rows.length} 份）`, wide: true, hideFooter: true,
+    body: `${d.anomalies.length ? `<div class="notice warn no-print" style="margin-bottom:10px">
+        <strong>異常提醒</strong><br>${d.anomalies.map(UI.esc).join('<br>')}</div>` : ''}
+      ${d.skipped ? `<div class="notice warn no-print" style="margin-bottom:10px">
+        有 ${d.skipped} 筆不在您的存取範圍內，未列入。</div>` : ''}
+      ${d.background ? `<div class="notice no-print" id="bg-note" style="margin-bottom:10px">
+        筆數較多（${d.rows.length} 筆），正在產生中…</div>` : ''}
+      <div class="doc-watermark" aria-hidden="true">${new Array(60).fill(UI.esc(mark)).join('　')}</div>
+      <div id="batch-docs">${d.rows.map(one).join('')}</div>
+      <div class="no-print" style="display:flex;gap:8px;margin-top:14px">
+        <button class="btn small secondary" id="print-all">列印全部（合併）</button>
+        ${d.mode === 'split' || d.rows.length > 1 ? '<button class="btn small secondary" id="print-one">逐筆列印（分檔）</button>' : ''}
+      </div>`
+  });
+
+  m.body.querySelector('#print-all').onclick = () => window.print();
+  const one1 = m.body.querySelector('#print-one');
+  // 分檔：一次只顯示一份再叫列印，使用者可逐份另存 PDF
+  if (one1) one1.onclick = async () => {
+    const docs = [...m.body.querySelectorAll('.print-doc')];
+    for (let i = 0; i < docs.length; i++) {
+      docs.forEach((el2, j) => { el2.style.display = i === j ? '' : 'none'; });
+      window.print();
+      await new Promise(r => setTimeout(r, 400));
+    }
+    docs.forEach(el2 => { el2.style.display = ''; });
+  };
+
+  if (d.background) {
+    // 畫面已經把全部畫完了，回報批次完成並通知
+    POST(`/print-batches/${d.batch_no}/done`, {}).then(() => {
+      const n = m.body.querySelector('#bg-note');
+      if (n) n.innerHTML = `批次 <strong>${UI.esc(d.batch_no)}</strong> 已產生完成（${d.rows.length} 筆）。`;
+      UI.toast(`批次 ${d.batch_no} 已完成`);
+    }).catch(() => {});
+  }
 }

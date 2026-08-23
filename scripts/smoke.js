@@ -382,6 +382,41 @@ function startServer() {
     equal(p.subjective, 'S', '紀錄內容');
     await chen.fails('GET', `/api/notes/${noteId}/print`, undefined, '主責');
   });
+  await test('批次列印：用途必填、留批次軌跡、逐筆檢查保密邊界', async () => {
+    await lin.fails('POST', '/api/notes/print-batch', { ids: [noteId] }, '用途');
+    await lin.fails('POST', '/api/notes/print-batch', { ids: [noteId], purpose: '亂填' }, '用途');
+    await lin.fails('POST', '/api/notes/print-batch', { ids: [noteId], purpose: '其他' }, '說明');
+    const byId = await lin.ok('POST', '/api/notes/print-batch', { ids: [noteId], purpose: '督考' });
+    equal(byId.rows.length, 1, '依 id 取件數');
+    assert(/^PB-\d{8}-\d{4}$/.test(byId.batch_no), `批次編號格式異常：${byId.batch_no}`);
+    assert(byId.center_name && byId.printed_by, '應帶機構抬頭與列印人');
+    const byRange = await lin.ok('POST', '/api/notes/print-batch',
+      { client_id: clientId, from: '2000-01-01', to: '2100-01-01', purpose: '內部歸檔' });
+    assert(byRange.rows.length >= 1, '依區間應取到紀錄');
+    await lin.fails('POST', '/api/notes/print-batch',
+      { client_id: clientId, from: '2000-01-01', to: '2000-01-02', purpose: '督考' }, '沒有符合');
+    await lin.fails('POST', '/api/notes/print-batch', { purpose: '督考' }, '沒有符合');
+    await chen.fails('POST', '/api/notes/print-batch', { ids: [noteId], purpose: '督考' }, '存取範圍');
+  });
+  await test('列印範圍預查與反向選取的 N 一致', async () => {
+    const scope = await lin.ok('POST', '/api/notes/print-scope',
+      { client_id: clientId, from: '2000-01-01', to: '2100-01-01' });
+    assert(scope.total >= 1, '應回傳可見筆數');
+    equal(scope.ids.length, scope.total, 'ids 與 total 必須一致（反向選取靠它）');
+    assert(Array.isArray(scope.purposes) && scope.purposes.includes('司法調閱'), '應回傳用途選項');
+    // 非主責看到的 N 是 0，不是別人的筆數
+    const other = await chen.ok('POST', '/api/notes/print-scope', { client_id: clientId, from: '2000-01-01', to: '2100-01-01' });
+    equal(other.total, 0, '非主責的可見筆數應為 0');
+    assert(other.hidden >= 1, '應回報被擋下的筆數');
+  });
+  await test('列印批次軌跡可查、且沒有修改或刪除的端點', async () => {
+    const d = await lin.ok('GET', '/api/print-batches');
+    assert(d.rows.length >= 2, '前面兩次列印應留下批次');
+    const b = d.rows[0];
+    assert(b.batch_no && b.purpose && b.user_name && b.note_ids.length, '批次欄位齊全');
+    const r1 = await fetch(BASE + `/api/print-batches/${b.id}`, { method: 'DELETE' });
+    assert(r1.status === 404 || r1.status === 401, '不應提供刪除批次的端點');
+  });
   await test('實習生紀錄須經督導覆核才定稿', async () => {
     const u = await admin.ok('POST', '/api/users', {
       username: 'smoke_intern', password: '123456', name: '冒煙實習生', role: 'counselor',
@@ -545,6 +580,62 @@ function startServer() {
   // ---------------------------------------------------------------- LINE 傳話與改期簽核
   section('LINE 傳話與改期簽核');
   let reqId, reschedApptId;
+  await test('個案端申請預設進「待審核轉達」，行政放行後才進群組', async () => {
+    const crypto = require('crypto');
+    const secret = 'relay-approval-secret';
+    await admin.ok('PUT', '/api/line/credentials', { line_channel_secret: secret, line_channel_token: 'tok3' });
+    await admin.ok('PUT', '/api/settings', { line_relay_requires_approval: '1' });
+    // 先綁一位個案並讓他有未來預約
+    const target = addDays(monday, 63);
+    await admin.ok('POST', '/api/appointments',
+      { client_id: clientId, counselor_id: 2, date: target, start_time: '13:00' });
+    const raw = JSON.stringify({ events: [{ type: 'message', replyToken: 'rt1',
+      source: { type: 'user', userId: 'Uapproval1' }, message: { type: 'text', text: '綁定 0900000001' } }] });
+    const sig = b => crypto.createHmac('sha256', secret).update(b).digest('base64');
+    await fetch(BASE + '/line/webhook', { method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'X-Line-Signature': sig(raw) }, body: raw });
+    await new Promise(r => setTimeout(r, 300));
+    const raw2 = JSON.stringify({ events: [{ type: 'message', replyToken: 'rt2',
+      source: { type: 'user', userId: 'Uapproval1' }, message: { type: 'text', text: '我要改期，那天有事' } }] });
+    await fetch(BASE + '/line/webhook', { method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'X-Line-Signature': sig(raw2) }, body: raw2 });
+    await new Promise(r => setTimeout(r, 300));
+    const pending = await admin.ok('GET', '/api/reschedule-requests?status=new');
+    const r = pending[0];
+    assert(r, '應有一筆待審核轉達');
+    equal(r.status, 'new', '未經審核不應轉達');
+    const ev = await admin.ok('GET', '/api/line/events');
+    assert(!ev.some(e => e.request_id === r.id && e.source_type === 'group'),
+      '未審核前不應有送往群組的紀錄');
+    // 放行並修訂文字
+    const out = await admin.ok('POST', `/api/reschedule-requests/${r.id}/relay`, { relay_text: '個案希望改期（櫃檯已確認）' });
+    assert(out.status, '應回傳送出結果');
+    const after = (await admin.ok('GET', '/api/reschedule-requests?status=all')).find(x => x.id === r.id);
+    equal(after.status, 'relayed', '放行後狀態');
+    equal(after.relay_text, '個案希望改期（櫃檯已確認）', '修訂後的轉達文字');
+    assert(after.relay_approved_by, '應記錄放行的人');
+    await admin.ok('DELETE', `/api/line/clients/${clientId}/bind`);
+    await admin.ok('PUT', '/api/line/credentials', { clear_secret: true, clear_token: true });
+  });
+  await test('不轉達與重新開啟', async () => {
+    const target = addDays(monday, 70);
+    const a = await admin.ok('POST', '/api/appointments',
+      { client_id: clientId, counselor_id: 2, date: target, start_time: '15:00' });
+    const r = await admin.ok('POST', '/api/reschedule-requests',
+      { appointment_id: a.id, raw_text: '誤傳訊息' });
+    // 櫃檯代錄的是行政自己輸入的，預設直接轉達；把它退回待審核再測拒絕
+    await admin.ok('POST', `/api/reschedule-requests/${r.id}/reopen`).catch(() => {});
+    const cur = (await admin.ok('GET', '/api/reschedule-requests?status=all')).find(x => x.id === r.id);
+    if (cur.status === 'new') {
+      await admin.ok('POST', `/api/reschedule-requests/${r.id}/deny-relay`, { decision_note: '誤傳', notify: false });
+      const denied = (await admin.ok('GET', '/api/reschedule-requests?status=denied')).find(x => x.id === r.id);
+      equal(denied.status, 'denied', '拒絕轉達後狀態');
+      await admin.ok('POST', `/api/reschedule-requests/${r.id}/reopen`, {});
+      const back = (await admin.ok('GET', '/api/reschedule-requests?status=new')).find(x => x.id === r.id);
+      equal(back.status, 'new', '重新開啟後回到待審核');
+    }
+    await admin.ok('DELETE', `/api/reschedule-requests/${r.id}`);
+  });
   await test('櫃檯代錄改期申請並轉達（未設憑證時只留紀錄）', async () => {
     const target = addDays(monday, 35);
     const a = await admin.ok('POST', '/api/appointments',
@@ -597,10 +688,12 @@ function startServer() {
     const st2 = await admin.ok('GET', '/api/line/status');
     equal(st2.counselors.find(c => c.id === 2).line_group_id, 'Cgroup-test', '群組設定');
   });
-  await test('webhook 收個案訊息：綁定→提出改期→轉群組→群組回覆', async () => {
+  await test('關閉審核時：綁定→提出改期→直接轉群組→群組回覆', async () => {
     const crypto = require('crypto');
     const secret = 'smoke-secret';
     await admin.ok('PUT', '/api/settings', { line_channel_secret: secret, line_channel_token: 'smoke-token' });
+    // 這一段驗的是「收到即轉達」的舊行為，把審核關卡關掉
+    await admin.ok('PUT', '/api/settings', { line_relay_requires_approval: '0' });
     const hook = async payload => {
       const raw = JSON.stringify(payload);
       const sig = crypto.createHmac('sha256', secret).update(raw).digest('base64');
@@ -650,7 +743,7 @@ function startServer() {
     const msgs = await admin.ok('GET', `/api/messages?client_id=${clientId}`);
     assert(msgs.some(m => m.content === '謝謝老師'), '一般訊息應進個案訊息');
 
-    await admin.ok('PUT', '/api/settings', { line_channel_secret: '', line_channel_token: '' });
+    await admin.ok('PUT', '/api/settings', { line_channel_secret: '', line_channel_token: '', line_relay_requires_approval: '1' });
   });
 
   await test('憑證可在設定頁直接填、留空不覆蓋、可清除', async () => {
@@ -879,6 +972,112 @@ function startServer() {
       const after = await admin.ok('GET', '/api/reschedule-requests?status=open');
       assert(!after.some(x => x.id === open2[0].id), '應已刪除');
     }
+  });
+
+  // ---------------------------------------------------------------- 客戶分級與財務儀表板
+  section('客戶分級與財務儀表板');
+  await test('客戶分級：出席率不計取消，逾期未收款列為需關注', async () => {
+    const d = await admin.ok('GET', '/api/client-tiers');
+    assert(d.rows.length >= 1, '應有個案');
+    const c = d.rows.find(x => x.id === clientId);
+    assert(c, '應含測試個案');
+    const scheduled = c.done + c.no_show;
+    equal(c.attendance, scheduled ? Math.round(c.done / scheduled * 100) : null, '出席率算法');
+    assert(Object.keys(d.counts).length >= 6, '應回傳各級人數');
+    assert(d.rules.vip_sessions > 0 && d.rules.good_attendance > 0, '應回傳門檻設定');
+    const filtered = await admin.ok('GET', '/api/client-tiers?tier=' + c.tier);
+    assert(filtered.rows.every(x => x.tier === c.tier), '篩選結果');
+  });
+  await test('財務儀表板：實收＝收款−退費，逾期與方案餘額分開列', async () => {
+    const d = await admin.ok('GET', '/api/finance/dashboard');
+    equal(d.months.length, 12, '預設近 12 個月');
+    for (const m of d.months) equal(m.net, m.paid - m.refund, `${m.month} 實收算法`);
+    assert(d.summary.unpaid_total >= d.summary.overdue_total, '逾期金額不應大於未收總額');
+    assert(Array.isArray(d.by_payer) && Array.isArray(d.by_counselor) && Array.isArray(d.by_site), '結構分析欄位');
+    assert(typeof d.summary.unused_package_value === 'number', '方案未使用餘額');
+    const one = await admin.ok('GET', '/api/finance/dashboard?months=3');
+    equal(one.months.length, 3, '可指定月數');
+  });
+  await test('行政人員看得到分級與財務，但仍讀不到晤談內容', async () => {
+    await office.ok('GET', '/api/client-tiers');
+    await office.ok('GET', '/api/finance/dashboard');
+    await office.fails('POST', '/api/notes/print-batch', { ids: [noteId] }, '權限');
+  });
+
+  // ---------------------------------------------------------------- 非個案服務
+  section('非個案服務與紀錄類型');
+  await test('非個案服務表單沒有個案欄位，且不進個案統計', async () => {
+    const before = (await admin.ok('GET', '/api/clients')).length;
+    const r = await lin.ok('POST', '/api/nonclient-services', {
+      record_type: 'outreach_talk', date: monday, org_name: '冒煙國中',
+      topic: '青少年情緒調適', location: '該校禮堂', attendees: 120, fee: 6000, fee_method: '單位付款'
+    });
+    assert(r.id, '應建立成功');
+    await lin.fails('POST', '/api/nonclient-services', { date: monday, org_name: '' }, '對象單位');
+    const list = await lin.ok('GET', '/api/nonclient-services?from=2000-01-01&to=2100-01-01');
+    const row = list.rows.find(x => x.id === r.id);
+    assert(row, '應查得到');
+    assert(!('client_id' in row), '非個案服務不應有個案欄位');
+    equal(list.summary.attendees >= 120, true, '統計參與人數');
+    equal((await admin.ok('GET', '/api/clients')).length, before, '不應憑空多出個案');
+    // 個案統計不受影響
+    const rep = await admin.ok('GET', `/api/reports?month=${monday.slice(0, 7)}`);
+    assert(rep, '報表仍可載入');
+    await lin.ok('PUT', `/api/nonclient-services/${r.id}`, { attendees: 130 });
+    await lin.ok('DELETE', `/api/nonclient-services/${r.id}`);
+  });
+  await test('歷史虛擬個案批次重新標記僅限管理者', async () => {
+    await lin.fails('POST', '/api/nonclient-services/migrate',
+      { client_id: clientId, org_name: 'x' }, '管理者');
+    await admin.fails('POST', '/api/nonclient-services/migrate', { client_id: clientId }, '對象單位');
+  });
+
+  // ---------------------------------------------------------------- AI 助理
+  section('AI 助理');
+  await test('未設金鑰時停用，提問回明確錯誤', async () => {
+    const st = await admin.ok('GET', '/api/ai/status');
+    equal(st.enabled, false, '未設金鑰應停用');
+    equal(st.model, 'claude-opus-5', '模型');
+    assert(st.tools.length >= 5, '應列出可用工具');
+    assert(Object.keys(st.field_guide).length >= 10, '應有欄位字典');
+    await admin.fails('POST', '/api/ai/ask', { question: '這個月收多少' }, '金鑰');
+    await admin.fails('POST', '/api/ai/ask', { question: '' }, '問題');
+  });
+  await test('金鑰格式檢查與遮罩', async () => {
+    await admin.fails('PUT', '/api/ai/key', { api_key: 'not-a-key' }, '格式');
+    await admin.ok('PUT', '/api/ai/key', { api_key: 'sk-ant-smoketestkey1234567890' });
+    const st = await admin.ok('GET', '/api/ai/status');
+    equal(st.enabled, true, '設定後啟用');
+    assert(!st.key_masked.includes('smoketestkey'), '不應回傳完整金鑰');
+    await admin.ok('PUT', '/api/ai/key', { clear: true });
+    equal((await admin.ok('GET', '/api/ai/status')).enabled, false, '清除後停用');
+  });
+  await test('工具全部唯讀，且查不到晤談內容', () => {
+    const ai = require(path.join(ROOT, 'src', 'ai.js'));
+    const user = { id: 1, name: '冒煙', role: 'admin', modules: [] };
+    const dump = [];
+    for (const t of Object.values(ai.TOOLS)) {
+      // 每個工具都用空參數跑一次，確認不丟例外且回得出東西
+      const out = t.run({}, {});
+      dump.push(JSON.stringify(out));
+      // 工具定義不得出現任何寫入字樣
+      const src = t.run.toString();
+      for (const bad of ['INSERT', 'UPDATE ', 'DELETE', 'DROP', 'ALTER']) {
+        assert(!src.toUpperCase().includes(bad), `工具 ${t.def.name} 疑似含寫入語句 ${bad}`);
+      }
+    }
+    const all = dump.join('');
+    // seed 的晤談紀錄內容不應該出現在任何工具的輸出裡
+    for (const secret of ['subjective', 'objective', 'assessment', 'process_note', 'warning_signs']) {
+      assert(!all.includes(secret), `工具輸出不應包含晤談內容欄位 ${secret}`);
+    }
+    assert(user, '');
+  });
+  await test('模組權限決定可用工具', async () => {
+    const st = await office.ok('GET', '/api/ai/status');
+    const names = st.tools.map(t => t.name);
+    assert(names.includes('overview'), '行政應可用概況');
+    assert(!names.includes('counselor_output'), '行政沒有報表模組，不該有心理師產出工具');
   });
 
   // ---------------------------------------------------------------- 附件

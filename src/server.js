@@ -102,6 +102,12 @@ app.use('/api', require('./routes/imports'));
 app.use(require('./routes/line'));
 // 對外預約頁的公開 API（免登入、有流量限制，只吐空檔不吐個案資料）
 app.use(require('./routes/booking'));
+// 客戶分級與財務儀表板（只用行政層資料，不碰晤談內容）
+app.use('/api', require('./routes/insights'));
+// AI 助理：以唯讀工具查後台資料，晤談內容不進模型上下文
+app.use('/api', require('./routes/ai'));
+// 非個案服務（外派演講、講座）與歷史虛擬個案重新標記
+app.use('/api', require('./routes/nonclient'));
 
 // 手動觸發備份與附件同步：換機、要立刻帶走資料，或剛上傳完重要附件時不必等排程。
 // 僅管理者可用，並回報備份檔與同步的附件數，方便確認真的做了。

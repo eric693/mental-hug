@@ -53,6 +53,12 @@ ensureColumns('session_notes', {
   review_comment: "TEXT NOT NULL DEFAULT ''",
   submitted_at: "TEXT NOT NULL DEFAULT ''"
 });
+ensureColumns('reschedule_requests', {
+  // 轉達前的人工審核：行政人員可修訂要送進心理師群組的文字，並記錄是誰放行的
+  relay_text: "TEXT NOT NULL DEFAULT ''",
+  relay_approved_by: 'INTEGER REFERENCES users(id)',
+  relay_approved_at: "TEXT NOT NULL DEFAULT ''"
+});
 ensureColumns('consent_templates', {
   // 停用的範本不再要求新個案簽署，但已簽署的紀錄仍保留
   active: 'INTEGER NOT NULL DEFAULT 1'
@@ -211,6 +217,53 @@ db.exec(`CREATE TABLE IF NOT EXISTS intake_forms (
 );
 CREATE INDEX IF NOT EXISTS idx_intakeform_status ON intake_forms(status, created_at);`);
 
+// ---- 紀錄類型與非個案服務（M8-01～04）----
+// 外派演講、企業講座這類「沒有個案」的服務，過去被迫掛在虛擬個案底下，
+// 汙染個案統計。改成獨立資料表：表單裡根本沒有個案欄位，報表也自然分流。
+db.exec(`CREATE TABLE IF NOT EXISTS nonclient_services (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  record_type TEXT NOT NULL DEFAULT 'outreach_talk',  -- outreach_talk 外派演講 / lecture 講座課程 / other 其他非個案服務
+  date TEXT NOT NULL,
+  start_time TEXT NOT NULL DEFAULT '',
+  end_time TEXT NOT NULL DEFAULT '',
+  org_name TEXT NOT NULL DEFAULT '',           -- 對象單位
+  topic TEXT NOT NULL DEFAULT '',
+  location TEXT NOT NULL DEFAULT '',
+  site_id INTEGER REFERENCES sites(id),
+  user_id INTEGER REFERENCES users(id),        -- 執行人員
+  attendees INTEGER NOT NULL DEFAULT 0,
+  fee INTEGER NOT NULL DEFAULT 0,
+  fee_method TEXT NOT NULL DEFAULT '',         -- 收費方式：單位付款／個人付款／無償
+  note TEXT NOT NULL DEFAULT '',
+  migrated_from_note_id INTEGER,               -- 由歷史虛擬個案紀錄轉入時保留來源
+  created_by INTEGER REFERENCES users(id),
+  created_at TEXT NOT NULL DEFAULT (datetime('now','localtime'))
+);
+CREATE INDEX IF NOT EXISTS idx_nonclient_date ON nonclient_services(date);
+
+-- 列印批次紀錄（M8-09）：批次列印等於特種個資的大量匯出，必須留下完整軌跡且不可修改
+CREATE TABLE IF NOT EXISTS print_batches (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  batch_no TEXT NOT NULL UNIQUE,               -- 例 PB-20260819-0007
+  user_id INTEGER REFERENCES users(id),
+  user_name TEXT NOT NULL DEFAULT '',
+  purpose TEXT NOT NULL,                       -- 督考／司法調閱／個案申請／內部歸檔／其他（必填）
+  purpose_note TEXT NOT NULL DEFAULT '',
+  filters TEXT NOT NULL DEFAULT '',            -- 當時的篩選條件（JSON）
+  note_ids TEXT NOT NULL DEFAULT '',           -- 實際輸出的紀錄 id（JSON 陣列）
+  count INTEGER NOT NULL DEFAULT 0,
+  skipped INTEGER NOT NULL DEFAULT 0,          -- 因權限被略過的筆數
+  mode TEXT NOT NULL DEFAULT 'merged',         -- merged 合併一份 / split 分檔
+  status TEXT NOT NULL DEFAULT 'done',         -- done 已產生 / queued 背景處理中
+  ip TEXT NOT NULL DEFAULT '',
+  created_at TEXT NOT NULL DEFAULT (datetime('now','localtime'))
+);
+CREATE INDEX IF NOT EXISTS idx_print_batch_time ON print_batches(created_at);`);
+ensureColumns('session_notes', {
+  // 紀錄類型（M8-01）：個案晤談／團體／心理衡鑑；非個案服務另存 nonclient_services
+  record_type: "TEXT NOT NULL DEFAULT 'individual'"
+});
+
 // ---- 據點（分館）----
 // 多據點諮商所：諮商室屬於某個據點，心理師可跨據點看診（多對多），
 // 預約的據點由諮商室決定，視訊晤談則沿用心理師的主要據點。
@@ -340,6 +393,8 @@ const UI_TEXT_KEYS = Object.keys(UI_TEXT_DEFAULTS);
     line_channel_token: '',
     // 找不到心理師專屬群組時的預設群組（留空則只留在系統待簽核清單，不外送）
     line_default_group_id: '',
+    // 個案端來的訊息是否要先經行政人員審核才轉給心理師群組（雙向人工審核）
+    line_relay_requires_approval: '1',
     // 個案在官方帳號輸入哪些字視為請假／改期（逗號分隔）
     line_keywords: '改期,請假,取消,調整時間,換時間,不能來,無法出席',
     // 轉達給心理師群組的訊息範本
@@ -353,11 +408,22 @@ const UI_TEXT_KEYS = Object.keys(UI_TEXT_DEFAULTS);
     line_done_group: '【已簽核 #{req}】{client}（{code}）原訂 {date} {time} 已改期為 {new_date}（{new_weekday}）{new_time}。',
     line_reject_client: '{client} 您好，關於您提出的改期需求，請來電 {phone} 與我們確認後續安排。—— {center}',
     // 未啟用模組（逗號分隔的模組代碼）：側欄不出現、API 一律 403，權限勾選保留不動
-    disabled_modules: 'partners,risk,supervision',
+    disabled_modules: 'partners,risk,supervision,groups',
     // 細項開關：繼續教育積分區塊（關閉後「請假與繼續教育」只留請假）
     feature_ce: '0',
     time_off_reasons: '特休,病假,事假,研習,督導,公假,其他',
     group_topics: '情緒調適,人際關係,壓力管理,親職教養,悲傷輔導,正念練習',
+    // 批次列印稽核（M8-10）：單日超量門檻與所內上班時段，用於異常示警
+    print_batch_daily_limit: '100',
+    office_hours: '08:00-21:00',
+    // AI 助理：Anthropic API 金鑰（留空則改讀環境變數 ANTHROPIC_API_KEY；兩者都沒有就停用）
+    ai_api_key: '',
+    // 客戶分級門檻：各所標準不同，一律做成設定
+    tier_vip_sessions: '12',            // 累計完成晤談達此數視為長期個案
+    tier_regular_sessions: '4',
+    tier_good_attendance: '90',         // 出席率（%）達此為良好
+    tier_poor_attendance: '70',         // 低於此列入需關注
+    tier_dormant_days: '60',            // 幾天未晤談且無後續預約視為沉睡
     // 對外預約頁（免登入）：關閉後 /booking.html 只顯示請來電
     public_booking_enabled: '1',
     public_booking_notice: '本所為全預約制。送出後我們會在服務時間內與您電話確認時段與費用，'

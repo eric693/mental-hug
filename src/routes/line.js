@@ -29,7 +29,7 @@ function varsOf(r, extra = {}) {
     date: r.date || '',
     weekday: r.date ? line.weekdayName(r.date) : '',
     time: r.date ? `${r.start_time}-${r.end_time}` : '',
-    text: r.raw_text || '',
+    text: r.relay_text || r.raw_text || '',
     center: getSetting('center_name'),
     phone: getSetting('center_phone'),
     new_date: r.new_date || '',
@@ -193,8 +193,11 @@ async function handleUserMessage(userId, text, replyToken) {
   const r = requestRow(info.lastInsertRowid);
   audit('system', null, 'LINE', '收到改期／請假申請', String(r.id), { client_id: client.id });
 
-  // 先轉達心理師群組（這步會把申請推進到「待心理師回覆」），再回覆個案已收到
-  await relayToGroup(r);
+  // 個案端來的訊息預設要先經行政人員審核才轉給心理師群組（line_relay_requires_approval=1）。
+  // 個案在 LINE 打的字會原文轉進心理師的工作群組，先過一手可以擋掉打錯、情緒性內容
+  // 與不該進群組的個資；關掉這個設定就回到收到即轉達。
+  const needsApproval = getSetting('line_relay_requires_approval', '1') === '1';
+  if (!needsApproval) await relayToGroup(r);
   const ackText = line.fill(getSetting('line_ack_client'), { phone: getSetting('center_phone') });
   await line.send({
     kind: 'reply', replyToken, to: userId, text: ackText,
@@ -286,13 +289,56 @@ router.post('/api/reschedule-requests', requireStaff('line'), async (req, res) =
   res.json({ id: r.id, relay: out });
 });
 
-// 重新轉達（群組換了、或第一次送失敗）
+// 准許轉達（審核通過）／重新轉達（群組換了、或第一次送失敗）。
+// 兩者做的事一樣：把申請送進心理師群組並推進狀態，差別只在按鈕文字。
 router.post('/api/reschedule-requests/:id/relay', requireStaff('line'), async (req, res) => {
   const r = requestRow(req.params.id);
   if (!r) return res.status(404).json({ error: '找不到此申請' });
+  if (r.status === 'denied') return res.status(400).json({ error: '此申請已被拒絕轉達，如要改判請先重新開啟' });
+  // 行政可在轉達前修訂要送出的文字（例如去掉不宜進群組的個資）
+  const edited = String((req.body || {}).relay_text || '').trim();
+  if (edited && edited !== r.raw_text) {
+    db.prepare('UPDATE reschedule_requests SET relay_text = ? WHERE id = ?').run(edited.slice(0, 1000), r.id);
+  }
   db.prepare("UPDATE reschedule_requests SET status = 'new' WHERE id = ? AND status = 'relayed'").run(r.id);
-  const out = await relayToGroup(requestRow(r.id));
+  const fresh = requestRow(r.id);
+  db.prepare('UPDATE reschedule_requests SET relay_approved_by = ?, relay_approved_at = ? WHERE id = ?')
+    .run(req.user.id, nowStamp(), r.id);
+  audit('staff', req.user.id, req.user.name, '准許轉達改期申請', String(r.id));
+  const out = await relayToGroup(fresh);
   res.json(out);
+});
+
+// 拒絕轉達：不進心理師群組，直接由櫃檯處理；可一併回覆個案
+router.post('/api/reschedule-requests/:id/deny-relay', requireStaff('line'), async (req, res) => {
+  const r = requestRow(req.params.id);
+  if (!r) return res.status(404).json({ error: '找不到此申請' });
+  if (r.status !== 'new') return res.status(400).json({ error: '此申請已轉達或已處理，無法在此拒絕' });
+  const note = String((req.body || {}).decision_note || '').trim();
+  db.prepare(`UPDATE reschedule_requests SET status = 'denied', relay_approved_by = ?, relay_approved_at = ?,
+      decision_note = ? WHERE id = ?`).run(req.user.id, nowStamp(), note, r.id);
+  audit('staff', req.user.id, req.user.name, '拒絕轉達改期申請', String(r.id), { note });
+  const out = (req.body || {}).notify === false ? { status: 'skipped' } : await line.send({
+    to: r.line_user_id,
+    text: line.fill(getSetting('line_reject_client'), varsOf(requestRow(r.id))),
+    flex: line.bubble({
+      title: '關於您的訊息', tone: 'warn',
+      body: line.fill(getSetting('line_reject_client'), varsOf(requestRow(r.id))),
+      footer: getSetting('center_phone') ? `諮商所電話：${getSetting('center_phone')}` : ''
+    }),
+    meta: { source_type: 'user', client_id: r.client_id, request_id: r.id }
+  });
+  res.json({ ok: true, client: out });
+});
+
+// 重新開啟被拒絕的申請（誤判時）
+router.post('/api/reschedule-requests/:id/reopen', requireStaff('line'), (req, res) => {
+  const r = requestRow(req.params.id);
+  if (!r) return res.status(404).json({ error: '找不到此申請' });
+  if (!['denied', 'rejected'].includes(r.status)) return res.status(400).json({ error: '只有被拒絕或退回的申請可以重新開啟' });
+  db.prepare("UPDATE reschedule_requests SET status = 'new', relay_approved_by = NULL, relay_approved_at = '' WHERE id = ?").run(r.id);
+  audit('staff', req.user.id, req.user.name, '重新開啟改期申請', String(r.id));
+  res.json({ ok: true });
 });
 
 // 代錄心理師回覆（心理師用電話或口頭回覆時）

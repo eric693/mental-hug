@@ -3,13 +3,44 @@
 // 行政人員在這一頁簽核 → 系統才真正改期，並同步回覆個案與群組。
 
 const RESCHED_STATUS = {
-  new: ['待轉達', 'warn'],
+  new: ['待審核轉達', 'danger'],
   relayed: ['待心理師回覆', 'warn'],
   replied: ['待行政簽核', 'danger'],
   approved: ['已簽核改期', 'ok'],
   rejected: ['已退回', ''],
+  denied: ['未轉達（已拒絕）', ''],
   closed: ['已結束', '']
 };
+
+// 轉達審核：個案在 LINE 打的字會原文進到心理師的工作群組，
+// 所以送出前讓行政先看一眼，必要時修訂文字再放行。
+function relayApproveModal(r, done) {
+  UI.modal({
+    title: `審核轉達 #${r.id}　${r.client_name || ''}`,
+    wide: true,
+    submitText: '准許並轉達群組',
+    body: `
+      <div style="font-size:13.5px;background:var(--primary-light);padding:10px;border-radius:8px;margin-bottom:12px">
+        <div><strong>個案</strong>：${UI.esc(r.client_name || '')}${r.client_code ? '（' + UI.esc(r.client_code) + '）' : ''}</div>
+        <div style="margin-top:4px"><strong>原訂</strong>：${r.date ? `${r.date}（${UI.weekdayName(r.date)}）${r.start_time}-${r.end_time}` : '（查無對應預約）'}</div>
+        <div style="margin-top:4px"><strong>轉達對象</strong>：${UI.esc(r.counselor_name || '未指定心理師')}
+          ${r.line_group_id ? '' : '<span style="color:var(--danger)">（尚未設定群組，將改用預設群組）</span>'}</div>
+      </div>
+      <div class="form-grid">
+        ${UI.textarea('relay_text', '要轉給心理師群組的內容（可修訂，預設為個案原話）',
+    { value: r.relay_text || r.raw_text, rows: 5 })}
+      </div>
+      <div style="font-size:12.5px;color:var(--muted);margin-top:8px">
+        修訂後送出的是修訂版；原話仍完整保留在系統與傳話軌跡中。</div>`,
+    onSubmit: async e => {
+      const out = await POST(`/reschedule-requests/${r.id}/relay`, UI.formData(e));
+      UI.toast(out.status === 'sent' ? '已轉達心理師群組'
+        : out.status === 'skipped' ? '已放行，但尚未設定群組或憑證，訊息未送出' : '送出失敗：' + (out.message || ''),
+      out.status === 'failed');
+      done();
+    }
+  });
+}
 
 function reschedApproveModal(r) {
   const minutes = App.meta.session_minutes || 50;
@@ -66,15 +97,42 @@ App.page('reschedule', {
             <td class="wrap narrow" style="font-size:13px">${r.counselor_reply ? UI.nl2br(r.counselor_reply) : '-'}</td>
             <td>${UI.tag(label, tone)}${r.kind === 'cancel' ? UI.tag('請假取消', '') : ''}</td>
             <td style="white-space:nowrap">
-              ${['approved', 'rejected'].includes(r.status) ? ''
-    : `<button class="btn tiny" data-ap="${r.id}">簽核改期</button>
+              ${r.status === 'new' ? `<button class="btn tiny" data-rv="${r.id}">審核轉達</button>
+                 <button class="btn tiny danger" data-dn="${r.id}">不轉達</button>` : ''}
+              ${['relayed', 'replied'].includes(r.status)
+    ? `<button class="btn tiny" data-ap="${r.id}">簽核改期</button>
                  <button class="btn tiny secondary" data-rp="${r.id}">代錄回覆</button>
                  <button class="btn tiny secondary" data-rl="${r.id}">重送群組</button>
-                 <button class="btn tiny danger" data-rj="${r.id}">退回</button>`}
+                 <button class="btn tiny danger" data-rj="${r.id}">退回</button>` : ''}
+              ${['denied', 'rejected'].includes(r.status) ? `<button class="btn tiny secondary" data-ro="${r.id}">重新開啟</button>` : ''}
               ${r.status !== 'approved' ? `<button class="btn tiny danger" data-rd="${r.id}">刪除</button>` : ''}
             </td></tr>`;
         }), '目前沒有改期申請');
 
+      el.querySelectorAll('[data-rv]').forEach(b => {
+        b.onclick = () => relayApproveModal(rows.find(x => x.id === Number(b.dataset.rv)), draw);
+      });
+      el.querySelectorAll('[data-dn]').forEach(b => {
+        b.onclick = () => UI.modal({
+          title: '不轉達給心理師',
+          body: `<div class="form-grid">${UI.textarea('decision_note', '原因（僅存於系統）')}
+            ${UI.checkbox('notify', '以 LINE 回覆個案請他來電確認', true)}</div>
+            <div style="font-size:12.5px;color:var(--muted);margin-top:8px">
+              適用於誤傳、與改期無關、或需要櫃檯直接處理的訊息；不會進到心理師群組。</div>`,
+          onSubmit: async e => {
+            await POST(`/reschedule-requests/${b.dataset.dn}/deny-relay`, UI.formData(e));
+            UI.toast('已標記為不轉達');
+            draw();
+          }
+        });
+      });
+      el.querySelectorAll('[data-ro]').forEach(b => {
+        b.onclick = async () => {
+          await POST(`/reschedule-requests/${b.dataset.ro}/reopen`, {});
+          UI.toast('已重新開啟，回到待審核轉達');
+          draw();
+        };
+      });
       el.querySelectorAll('[data-ap]').forEach(b => {
         b.onclick = () => reschedApproveModal(rows.find(x => x.id === Number(b.dataset.ap)));
       });
@@ -123,16 +181,19 @@ App.page('reschedule', {
     };
 
     el.innerHTML = `<div class="toolbar">
-        ${UI.select('st', '狀態', [['open', '待處理'], ['replied', '待行政簽核'], ['approved', '已簽核'], ['rejected', '已退回'], ['all', '全部']], { value: 'open' })}
+        ${UI.select('st', '狀態', [['open', '待處理'], ['new', '待審核轉達'], ['replied', '待行政簽核'],
+    ['approved', '已簽核'], ['denied', '未轉達'], ['rejected', '已退回'], ['all', '全部']], { value: 'open' })}
         <div class="spacer"></div>
         <button class="btn secondary" id="add">櫃檯代錄申請</button></div>
       <div class="card" id="list"></div>
       <div class="card"><h3>怎麼運作</h3>
         <ol style="font-size:13.5px;line-height:1.9;padding-left:20px;color:var(--muted)">
           <li>個案在官方帳號傳「改期／請假」等關鍵字的訊息（關鍵字可於系統設定調整）。</li>
-          <li>系統自動抓出他最近一筆有效預約，把原話轉到該心理師的 LINE 群組，並回覆個案已收到。</li>
+          <li>系統抓出他最近一筆有效預約建立申請，回覆個案已收到，狀態為<strong>待審核轉達</strong>。</li>
+          <li><strong>行政人員審核</strong>：按「審核轉達」看過內容（可修訂文字）後放行，才會送進心理師群組；
+            誤傳或不該進群組的訊息按「不轉達」。</li>
           <li>心理師直接在群組回覆；多筆同時進行時在訊息裡寫 <code>#編號</code> 指定。</li>
-          <li>行政人員在這一頁按「簽核改期」填入新時段，系統檢查衝突後才真正改期。</li>
+          <li><strong>行政人員再審一次</strong>：按「簽核改期」填入新時段，系統檢查衝突後才真正改期。</li>
           <li>改期完成同時送到個案的對話框與心理師群組。</li>
         </ol>
         <div style="font-size:12.5px;color:var(--muted)">

@@ -373,3 +373,31 @@ table.list tr:hover td { background: #f8fbfb; }
 .flow-step b { font-size: 14.5px; }
 .flow-step p { font-size: 13px; color: var(--muted); line-height: 1.8; margin-top: 2px; }
 .flow-step code { background: var(--primary-light); border-radius: 4px; padding: 1px 5px; font-size: 12.5px; }
+
+/* 批次列印：每份紀錄各自分頁 */
+.print-doc.page-break { border-top: 2px dashed var(--border); margin-top: 26px; padding-top: 22px; }
+@media print { .print-doc.page-break { break-before: page; page-break-before: always; border-top: none; margin-top: 0; padding-top: 0; } }
+
+/* ---- AI 助理 ---- */
+.ai-chat { min-height: 220px; max-height: 52vh; overflow-y: auto; display: flex; flex-direction: column; gap: 10px;
+  padding: 4px 2px; }
+.ai-chat .chat-msg { max-width: 88%; }
+.ai-empty { color: var(--muted); text-align: center; padding: 26px 10px; }
+.ai-samples { display: flex; flex-wrap: wrap; gap: 8px; justify-content: center; margin-top: 10px; }
+.ai-sample { border: 1px solid var(--border); background: #fff; border-radius: 999px; padding: 6px 13px;
+  font-size: 13px; cursor: pointer; color: var(--text); }
+.ai-sample:hover { background: var(--primary-light); border-color: var(--primary); }
+
+/* 批次列印浮水印（M8-08）：position:fixed 在列印時會重複出現在每一頁，
+   因此整批只需要一個元素就能讓每頁都帶上列印者、時間與批次編號。不提供關閉。 */
+.doc-watermark { display: none; }
+@media print {
+  .doc-watermark {
+    display: block; position: fixed; top: 0; left: 0; right: 0; bottom: 0;
+    pointer-events: none; z-index: 0; overflow: hidden;
+    color: rgba(78, 85, 86, 0.13); font-size: 13px; letter-spacing: 2px;
+    line-height: 3.6; word-break: break-all; transform: rotate(-24deg) scale(1.4);
+    transform-origin: center;
+  }
+  .print-doc { position: relative; z-index: 1; }
+}
