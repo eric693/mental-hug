@@ -275,15 +275,24 @@ router.get('/reconcile/report', requireStaff('billing'), (req, res) => {
     WHERE substr(p.paid_at,1,7) = ? AND (p.invoice_id IS NULL
       OR NOT EXISTS (SELECT 1 FROM invoices i WHERE i.id = p.invoice_id))`).all(month);
 
+  // 兩邊必須同基準才可比：左邊是「該月收費單中已收款的金額」，
+  // 右邊就要是「這些收費單實際收到的錢」，而不是「該月發生的入帳」——
+  // 服務日與入帳日常常跨月，用不同基準對帳永遠對不起來。
   const bySite = db.prepare(`SELECT COALESCE(s.name,'未歸屬') AS site, s.legal_entity,
       COUNT(DISTINCT i.id) AS invoices,
       COALESCE(SUM(CASE WHEN i.status = 'paid' THEN i.amount END),0) AS invoiced,
-      (SELECT COALESCE(SUM(p.amount),0) FROM payments p
-        WHERE substr(p.paid_at,1,7) = ? AND p.status = 'settled'
-          AND (p.site_id = s.id OR (p.site_id IS NULL AND s.id IS NULL))) AS received
+      COALESCE(SUM((SELECT COALESCE(SUM(p.amount),0) FROM payments p
+        WHERE p.invoice_id = i.id AND p.status = 'settled')),0) AS received
     FROM invoices i LEFT JOIN sites s ON s.id = i.site_id
     WHERE i.date LIKE ? AND i.status <> 'void'
-    GROUP BY i.site_id`).all(month, like);
+    GROUP BY i.site_id`).all(like);
+
+  // 另外列出「當月實際入帳」供金流對帳（可能包含前幾個月的收費單）
+  const cashInMonth = db.prepare(`SELECT COALESCE(s.name,'未歸屬') AS site,
+      COALESCE(SUM(p.amount),0) AS amount, COUNT(*) AS n
+    FROM payments p LEFT JOIN sites s ON s.id = p.site_id
+    WHERE substr(p.paid_at,1,7) = ? AND p.status = 'settled'
+    GROUP BY p.site_id`).all(month);
 
   res.json({
     month,
@@ -293,6 +302,7 @@ router.get('/reconcile/report', requireStaff('billing'), (req, res) => {
     amount_mismatch: amountMismatch,
     payment_no_invoice: paymentNoInvoice,
     by_site: bySite,
+    cash_in_month: cashInMonth,
     clean: !doneNoInvoice.length && !paidNoPayment.length && !amountMismatch.length && !paymentNoInvoice.length
   });
 });

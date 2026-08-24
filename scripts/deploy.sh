@@ -22,6 +22,9 @@ fail() { printf '\033[31m✗ %s\033[0m\n' "$1"; exit 1; }
 step "1/4 API 冒煙測試"
 npm run --silent smoke || fail "API 冒煙測試未通過，已中止部署（正式站未重啟）"
 
+step "1.5/4 需求驗收（跨模組資料串接）"
+npm run --silent accept || fail "驗收未通過，已中止部署（正式站未重啟）"
+
 step "2/4 重啟前先備份"
 # 服務還活著時透過 API 備份；服務已掛掉就跳過，不擋部署
 if curl -fsS -o /dev/null "http://localhost:$PORT/api/public/ui-texts" 2>/dev/null; then

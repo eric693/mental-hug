@@ -73,12 +73,14 @@ router.post('/invoices', requireStaff('billing'), (req, res) => {
 });
 
 router.post('/invoices/:id/pay', requireStaff('billing'), (req, res) => {
+  // 先把據點補齊（從預約帶），收據號前綴與金流歸屬都依賴它
+  reconcile.classify(req.params.id);
   const i = db.prepare('SELECT * FROM invoices WHERE id = ?').get(req.params.id);
   if (!i) return res.status(404).json({ error: '找不到此收費單' });
   if (i.status === 'paid') return res.status(400).json({ error: '此筆已收款' });
   const { method = '現金' } = req.body || {};
   db.prepare("UPDATE invoices SET status = 'paid', method = ?, paid_at = ?, receipt_no = ? WHERE id = ?")
-    .run(method, nowStamp(), i.receipt_no || nextReceiptNo(), i.id);
+    .run(method, nowStamp(), i.receipt_no || reconcile.nextReceiptNo(i.site_id), i.id);
   // 收款當下就把帳拆好：拖到月底才拆，規則早就改過好幾版了。
   // 拆不出來（沒有適用規則）不擋收款，但會留在「未拆帳」清單等處理。
   const sp = split.applySplit({ ...i, status: 'paid' });

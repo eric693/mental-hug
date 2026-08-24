@@ -9,7 +9,8 @@
     "seed": "node scripts/seed.js",
     "smoke": "node scripts/smoke.js",
     "smoke:ui": "node scripts/smoke-ui.js",
-    "deploy": "bash scripts/deploy.sh"
+    "deploy": "bash scripts/deploy.sh",
+    "accept": "node scripts/acceptance.js"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.120.0",

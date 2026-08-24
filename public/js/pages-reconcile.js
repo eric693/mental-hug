@@ -98,11 +98,20 @@ App.page('reconcile', {
           ${UI.table(cols, rows.map(render))}</div>` : '';
       el.querySelector('#report').innerHTML = `
         <div class="card"><h3>各主體收付對照</h3>
-          ${UI.table(['據點', '法律主體', '收費單數', '已收款金額', '金流入帳', '差額'], d.by_site.map(s => `<tr>
+          <div style="font-size:12.5px;color:var(--muted);margin-bottom:8px">
+            「已收款金額」與「對應入帳」都以<strong>該月的收費單</strong>為基準，兩邊同基準才可比；
+            服務日與入帳日跨月時，右側「當月實際入帳」會與它不同，那是正常的。</div>
+          ${UI.table(['據點', '法律主體', '收費單數', '已收款金額', '對應入帳', '差額', '當月實際入帳'],
+    d.by_site.map(s => {
+      const cash = (d.cash_in_month || []).find(c => c.site === s.site);
+      return `<tr>
             <td>${UI.esc(s.site)}</td><td>${UI.esc(s.legal_entity || '未設定')}</td>
             <td>${s.invoices}</td><td>${UI.fmtMoney(s.invoiced)}</td><td>${UI.fmtMoney(s.received)}</td>
             <td>${s.invoiced === s.received ? UI.tag('相符', 'ok')
-    : UI.tag(UI.fmtMoney(s.invoiced - s.received), 'danger')}</td></tr>`), '本月沒有收費資料')}</div>
+        : UI.tag(UI.fmtMoney(s.invoiced - s.received), 'danger')}</td>
+            <td>${cash ? `${UI.fmtMoney(cash.amount)}<div style="font-size:12px;color:var(--muted)">${cash.n} 筆</div>` : '-'}</td>
+          </tr>`;
+    }), '本月沒有收費資料')}</div>
         ${d.clean ? '<div class="notice ok">三方勾稽沒有差異。</div>' : ''}
         ${block('已完成但沒有收費單', d.done_no_invoice, ['日期', '個案', '心理師', '預約費用'],
     r => `<tr><td>${r.date} ${r.start_time}</td><td>${UI.esc(r.client_name)}（${UI.esc(r.client_code)}）</td>

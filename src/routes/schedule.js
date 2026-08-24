@@ -251,18 +251,20 @@ router.post('/appointments/:id/status', requireStaff('schedule'), (req, res) => 
           }
           if (cp.price > 0) {
             db.prepare(`INSERT INTO invoices (client_id, appointment_id, date, item, amount, status, payer,
-                project_id, client_project_id, note)
-              VALUES (?,?,?,?,?, 'unpaid', ?, ?, ?, ?)`).run(
+                project_id, client_project_id, site_id, note)
+              VALUES (?,?,?,?,?, 'unpaid', ?, ?, ?, ?, ?)`).run(
               a.client_id, a.id, a.date, `${a.date} ${cp.project_name}`, cp.price,
               cp.charge_client ? getSetting('payer_type_default', '自費') : cp.project_name,
-              cp.pid, cp.id, cp.charge_client ? '' : '由專案合約方支付，不向個案收費');
+              cp.pid, cp.id, a.site_id || null,
+              cp.charge_client ? '' : '由專案合約方支付，不向個案收費');
           }
         }
       } else if (a.fee > 0) {
-        db.prepare(`INSERT INTO invoices (client_id, appointment_id, date, item, amount, status, payer)
-                    VALUES (?,?,?,?,?, 'unpaid', ?)`).run(
+        // 帶入據點：收據抬頭、收據號前綴、金流歸屬與各主體對帳全靠它
+        db.prepare(`INSERT INTO invoices (client_id, appointment_id, date, item, amount, status, payer, site_id)
+                    VALUES (?,?,?,?,?, 'unpaid', ?, ?)`).run(
           a.client_id, a.id, a.date,
-          `${a.date} 晤談費用`, a.fee, getSetting('payer_type_default', '自費'));
+          `${a.date} 晤談費用`, a.fee, getSetting('payer_type_default', '自費'), a.site_id || null);
       }
       // 初談完成後個案由 intake 轉為進行中
       if (client && client.status === 'intake') db.prepare("UPDATE clients SET status = 'active' WHERE id = ?").run(client.id);
@@ -272,10 +274,11 @@ router.post('/appointments/:id/status', requireStaff('schedule'), (req, res) => 
       const rate = Number(getSetting('no_show_fee_rate', '0.5'));
       const amount = Math.round((a.fee || 0) * rate);
       if (amount > 0) {
-        db.prepare(`INSERT INTO invoices (client_id, appointment_id, date, item, amount, status, payer, note)
-                    VALUES (?,?,?,?,?, 'unpaid', ?, ?)`).run(
+        db.prepare(`INSERT INTO invoices (client_id, appointment_id, date, item, amount, status, payer, site_id, note)
+                    VALUES (?,?,?,?,?, 'unpaid', ?, ?, ?)`).run(
           a.client_id, a.id, a.date, `${a.date} 未到收費`, amount,
-          getSetting('payer_type_default', '自費'), `原費用 ${a.fee} 之 ${Math.round(rate * 100)}%`);
+          getSetting('payer_type_default', '自費'), a.site_id || null,
+          `原費用 ${a.fee} 之 ${Math.round(rate * 100)}%`);
       }
     }
   };
@@ -325,9 +328,14 @@ router.get('/sites', requireStaff(), (req, res) => {
 router.post('/sites', requireStaff('settings'), (req, res) => {
   const b = req.body || {};
   if (!String(b.name || '').trim()) return res.status(400).json({ error: '請填寫據點名稱' });
-  const info = db.prepare(`INSERT INTO sites (name, short_name, address, phone, transport, note, sort)
-    VALUES (?,?,?,?,?,?,?)`).run(String(b.name).trim(), b.short_name || '', b.address || '',
-    b.phone || '', b.transport || '', b.note || '', Number(b.sort) || 0);
+  // 主體欄位（收據抬頭、統編、收據前綴、收款帳號）新增時就要存，
+  // 否則得先建再編輯一次才會生效——之前正是這個原因讓收款連結帶不到主體。
+  const cols = ['name', 'short_name', 'address', 'phone', 'transport', 'note', 'sort',
+    'legal_entity', 'tax_id', 'license_no', 'director', 'receipt_prefix',
+    'pay_channel', 'pay_account', 'pay_link_base'];
+  const vals = cols.map(c => (c === 'sort' ? Number(b[c]) || 0 : String(b[c] ?? '').trim()));
+  const info = db.prepare(`INSERT INTO sites (${cols.join(',')})
+    VALUES (${cols.map(() => '?').join(',')})`).run(...vals);
   audit('staff', req.user.id, req.user.name, '新增據點', String(info.lastInsertRowid), b.name);
   res.json({ id: info.lastInsertRowid });
 });
