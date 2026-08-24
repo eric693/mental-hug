@@ -22,6 +22,18 @@ function conflictOf({ id, date, start_time, end_time, counselor_id, room_id }) {
     if (r.counselor_id === Number(counselor_id)) return { row: r, kind: '心理師' };
     if (room_id && r.room_id === Number(room_id)) return { row: r, kind: '諮商室' };
   }
+  // 場地租借也佔用同一間房：不雙向檢查的話，租出去的時段還是排得進諮商
+  if (room_id) {
+    const room = db.prepare('SELECT is_virtual FROM rooms WHERE id = ?').get(Number(room_id));
+    if (!room || !room.is_virtual) {
+      const rb = db.prepare(`SELECT b.*, rt.name AS renter_name FROM room_bookings b
+        JOIN renters rt ON rt.id = b.renter_id
+        WHERE b.room_id = ? AND b.date = ? AND b.status <> 'cancelled'
+          AND b.start_time < ? AND b.end_time > ? LIMIT 1`)
+        .get(Number(room_id), date, end_time, start_time);
+      if (rb) return { row: rb, kind: '場地租借' };
+    }
+  }
   return null;
 }
 
@@ -380,23 +392,39 @@ router.get('/counselor-sites', requireStaff(), (req, res) => {
 // ---- 諮商室 ----
 router.get('/rooms', requireStaff(), (req, res) => {
   res.json(db.prepare(`SELECT r.*, s.name AS site_name FROM rooms r
-    LEFT JOIN sites s ON s.id = r.site_id ORDER BY r.active DESC, s.sort, r.id`).all());
+    LEFT JOIN sites s ON s.id = r.site_id ORDER BY r.active DESC, r.is_virtual, s.sort, r.id`).all());
 });
+const ROOM_FIELDS = ['name', 'capacity', 'note', 'site_id', 'lighting', 'equipment',
+  'suitable_for', 'is_virtual', 'rent_rate'];
+function cleanRoom(b, base = {}) {
+  const out = { ...base };
+  for (const f of ROOM_FIELDS) {
+    if (b[f] === undefined) continue;
+    if (f === 'capacity') out[f] = Number(b[f]) || 1;
+    else if (f === 'rent_rate') out[f] = Number(b[f]) || 0;
+    else if (f === 'site_id') out[f] = Number(b[f]) || null;
+    else if (f === 'is_virtual') out[f] = b[f] ? 1 : 0;
+    else out[f] = String(b[f] ?? '');
+  }
+  return out;
+}
 router.post('/rooms', requireStaff('settings'), (req, res) => {
-  const { name = '', capacity = 1, note = '', site_id = null } = req.body || {};
-  if (!name) return res.status(400).json({ error: '請填寫名稱' });
-  const info = db.prepare('INSERT INTO rooms (name, capacity, note, site_id) VALUES (?,?,?,?)')
-    .run(name, Number(capacity) || 1, note, Number(site_id) || null);
+  const b = cleanRoom(req.body || {}, { capacity: 1, is_virtual: 0, rent_rate: 0 });
+  if (!String(b.name || '').trim()) return res.status(400).json({ error: '請填寫名稱' });
+  const cols = Object.keys(b);
+  const info = db.prepare(`INSERT INTO rooms (${cols.join(',')}) VALUES (${cols.map(() => '?').join(',')})`)
+    .run(...cols.map(c => b[c]));
   res.json({ id: info.lastInsertRowid });
 });
 router.put('/rooms/:id', requireStaff('settings'), (req, res) => {
   const r = db.prepare('SELECT * FROM rooms WHERE id = ?').get(req.params.id);
   if (!r) return res.status(404).json({ error: '找不到此諮商室' });
-  const b = req.body || {};
-  const { name = r.name, capacity = r.capacity, note = r.note, active = r.active } = b;
-  const siteId = b.site_id === undefined ? r.site_id : (Number(b.site_id) || null);
-  db.prepare('UPDATE rooms SET name = ?, capacity = ?, note = ?, active = ?, site_id = ? WHERE id = ?')
-    .run(name, Number(capacity) || 1, note, active ? 1 : 0, siteId, r.id);
+  const b = cleanRoom(req.body || {}, r);
+  const active = (req.body || {}).active === undefined ? r.active : ((req.body || {}).active ? 1 : 0);
+  db.prepare(`UPDATE rooms SET name = ?, capacity = ?, note = ?, site_id = ?, lighting = ?,
+      equipment = ?, suitable_for = ?, is_virtual = ?, rent_rate = ?, active = ? WHERE id = ?`)
+    .run(b.name, b.capacity, b.note, b.site_id, b.lighting, b.equipment, b.suitable_for,
+      b.is_virtual, b.rent_rate, active, r.id);
   res.json({ ok: true });
 });
 

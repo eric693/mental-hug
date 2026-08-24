@@ -479,6 +479,58 @@ ensureColumns('time_off', {
 });
 
 
+// ---- 空間屬性與場地租借（M4）----
+// 租借跟諮商是兩件事：它佔用同一間諮商室，但不該進個案系統、也不該混進諮商統計。
+// 所以獨立一張表，只有「佔用時段」這件事與預約共用衝突檢查。
+ensureColumns('rooms', {
+  lighting: "TEXT NOT NULL DEFAULT ''",          // 採光：自然光／無窗／半地下…
+  equipment: "TEXT NOT NULL DEFAULT ''",         // 設備：沙盤、單面鏡、投影、錄影
+  suitable_for: "TEXT NOT NULL DEFAULT ''",      // 適用服務別：個別／伴侶／團體／衡鑑／課程
+  is_virtual: 'INTEGER NOT NULL DEFAULT 0',      // 虛擬空間（到府外出、視訊），不佔實體房間
+  rent_rate: 'INTEGER NOT NULL DEFAULT 0'        // 對外租借時薪（0＝不對外出租）
+});
+
+db.exec(`CREATE TABLE IF NOT EXISTS renters (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  kind TEXT NOT NULL DEFAULT 'person',           -- person 個人 / company 法人
+  name TEXT NOT NULL,
+  tax_id TEXT NOT NULL DEFAULT '',               -- 法人統編／個人身分證號
+  contact TEXT NOT NULL DEFAULT '',
+  phone TEXT NOT NULL DEFAULT '',
+  email TEXT NOT NULL DEFAULT '',
+  address TEXT NOT NULL DEFAULT '',
+  contract_no TEXT NOT NULL DEFAULT '',
+  contract_start TEXT NOT NULL DEFAULT '',
+  contract_end TEXT NOT NULL DEFAULT '',
+  rate_type TEXT NOT NULL DEFAULT 'hourly',      -- hourly 時租 / package 方案
+  hourly_rate INTEGER NOT NULL DEFAULT 0,
+  package_note TEXT NOT NULL DEFAULT '',         -- 方案內容（例如每月 20 小時 12000 元）
+  note TEXT NOT NULL DEFAULT '',
+  active INTEGER NOT NULL DEFAULT 1,
+  created_at TEXT NOT NULL DEFAULT (datetime('now','localtime'))
+);
+CREATE TABLE IF NOT EXISTS room_bookings (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  room_id INTEGER NOT NULL REFERENCES rooms(id),
+  renter_id INTEGER NOT NULL REFERENCES renters(id),
+  site_id INTEGER REFERENCES sites(id),
+  date TEXT NOT NULL,
+  start_time TEXT NOT NULL,
+  end_time TEXT NOT NULL,
+  hours REAL NOT NULL DEFAULT 0,
+  rate INTEGER NOT NULL DEFAULT 0,
+  amount INTEGER NOT NULL DEFAULT 0,
+  purpose TEXT NOT NULL DEFAULT '',              -- 用途（課程、督導、團體…）
+  status TEXT NOT NULL DEFAULT 'booked',         -- booked / done / cancelled
+  billed_month TEXT NOT NULL DEFAULT '',         -- 已結算的月份
+  settled INTEGER NOT NULL DEFAULT 0,
+  note TEXT NOT NULL DEFAULT '',
+  created_by INTEGER REFERENCES users(id),
+  created_at TEXT NOT NULL DEFAULT (datetime('now','localtime'))
+);
+CREATE INDEX IF NOT EXISTS idx_rb_date ON room_bookings(date, room_id);
+CREATE INDEX IF NOT EXISTS idx_rb_renter ON room_bookings(renter_id, date);`);
+
 // ---- 收費、金流與對帳（M5）----
 // 六個據點分屬不同法律主體：收款帳號不同、收據抬頭不同、統編不同。
 // 入帳要自動歸屬到正確主體，收據也要開該主體的，否則帳務與稅務都對不起來。

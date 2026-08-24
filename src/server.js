@@ -118,6 +118,8 @@ app.use('/api', require('./routes/projects'));
 app.use('/api', require('./routes/reconcile'));
 // 排班與專業人員：可預約時段提交核定、產能、Ramp-up、請假異動
 app.use('/api', require('./routes/staffing'));
+// 場地租借：租用人主檔、租借預約、月結對帳單與空間佔用檢視
+app.use('/api', require('./routes/rentals'));
 
 // 手動觸發備份與附件同步：換機、要立刻帶走資料，或剛上傳完重要附件時不必等排程。
 // 僅管理者可用，並回報備份檔與同步的附件數，方便確認真的做了。

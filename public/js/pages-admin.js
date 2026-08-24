@@ -1142,9 +1142,12 @@ App.page('settings', {
     // ---- 諮商室 ----
     const rooms = await GET('/rooms');
     const rb = el.querySelector('#rooms');
-    rb.innerHTML = UI.table(['名稱', '據點', '容納人數', '備註', '狀態', ''], rooms.map(r => `<tr>
-        <td>${UI.esc(r.name)}</td><td>${UI.esc(r.site_name || '未指定')}</td>
-        <td>${r.capacity}</td><td>${UI.esc(r.note)}</td>
+    rb.innerHTML = UI.table(['名稱', '據點', '容納人數', '屬性', '租借時薪', '狀態', ''], rooms.map(r => `<tr>
+        <td>${UI.esc(r.name)}${r.is_virtual ? UI.tag('虛擬空間', '') : ''}</td>
+        <td>${UI.esc(r.site_name || '未指定')}</td>
+        <td>${r.capacity}</td>
+        <td class="wrap narrow" style="font-size:12.5px">${UI.esc([r.lighting, r.equipment, r.suitable_for].filter(Boolean).join('／') || r.note || '-')}</td>
+        <td>${r.rent_rate ? UI.fmtMoney(r.rent_rate) : '不出租'}</td>
         <td>${r.active ? UI.tag('啟用', 'ok') : UI.tag('停用')}</td>
         <td style="white-space:nowrap"><button class="btn tiny secondary" data-rm="${r.id}">編輯</button>
           <button class="btn tiny danger" data-rd="${r.id}">刪除</button></td></tr>`)) +
@@ -1153,6 +1156,11 @@ App.page('settings', {
       ${UI.input('name', '名稱', { value: r ? r.name : '' })}
       ${UI.select('site_id', '所屬據點', siteOpts, { value: r ? (r.site_id || '') : '' })}
       ${UI.input('capacity', '容納人數', { type: 'number', value: r ? r.capacity : 1 })}
+      ${UI.inputList('lighting', '採光', ['自然光', '半自然光', '無窗', '半地下'], { value: r ? (r.lighting || '') : '' })}
+      ${UI.input('equipment', '設備（沙盤、單面鏡、投影…）', { value: r ? (r.equipment || '') : '', full: true })}
+      ${UI.input('suitable_for', '適用服務別（個別／伴侶／團體／衡鑑／課程）', { value: r ? (r.suitable_for || '') : '', full: true })}
+      ${UI.input('rent_rate', '對外租借時薪（0＝不出租）', { type: 'number', value: r ? (r.rent_rate || 0) : 0 })}
+      ${UI.checkbox('is_virtual', '虛擬空間（到府外出、視訊）——不佔實體房間，可重複排', r ? !!r.is_virtual : false)}
       ${UI.input('note', '備註', { value: r ? r.note : '', full: true })}
       ${r ? UI.checkbox('active', '啟用', r.active) : ''}</div>`;
     rb.querySelector('#ar').onclick = () => UI.modal({

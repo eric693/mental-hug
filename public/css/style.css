@@ -446,3 +446,10 @@ table.list tr:hover td { background: #f8fbfb; }
   background: #eef2f3; color: var(--muted); margin: 2px 4px 2px 0; }
 .ramp-chip.ok { background: var(--ok-bg); color: var(--ok); }
 .ramp-chip.low { background: var(--warn-bg); color: var(--warn); }
+
+/* 空間佔用檢視 */
+.occ-table th, .occ-table td { padding: 3px 2px; text-align: center; font-size: 11px; }
+.occ-table td.occ { width: 16px; height: 22px; border: 1px solid #eef1f2; background: #fff; }
+.occ-appt { background: var(--primary) !important; }
+.occ-rent { background: var(--accent) !important; }
+.occ-key { display: inline-block; width: 14px; height: 14px; border-radius: 3px; vertical-align: -2px; }

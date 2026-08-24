@@ -1037,6 +1037,115 @@ function startServer() {
     await admin.fails('POST', '/api/nonclient-services/migrate', { client_id: clientId }, '對象單位');
   });
 
+  // ---------------------------------------------------------------- 場地租借
+  section('場地租借（雙向衝突、合約期間、月結）');
+  let renterId, roomId, virtualRoomId;
+  await test('空間屬性與虛擬空間', async () => {
+    const rooms = await admin.ok('GET', '/api/rooms');
+    roomId = rooms[0].id;
+    await admin.ok('PUT', `/api/rooms/${roomId}`, {
+      lighting: '自然光', equipment: '沙盤、單面鏡', suitable_for: '個別／團體', rent_rate: 800
+    });
+    const after = (await admin.ok('GET', '/api/rooms')).find(r => r.id === roomId);
+    equal(after.rent_rate, 800, '租借時薪');
+    equal(after.lighting, '自然光', '採光');
+    const v = await admin.ok('POST', '/api/rooms', { name: '到府外出（虛擬）', is_virtual: 1, capacity: 1 });
+    virtualRoomId = v.id;
+    equal((await admin.ok('GET', '/api/rooms')).find(r => r.id === v.id).is_virtual, 1, '虛擬空間');
+  });
+  await test('租用人主檔與合約期間檢核', async () => {
+    const r = await admin.ok('POST', '/api/renters', {
+      kind: 'company', name: '冒煙企業 EAP', tax_id: '53212539', contact: '陳小姐',
+      rate_type: 'hourly', hourly_rate: 1000,
+      contract_start: monday, contract_end: addDays(monday, 60)
+    });
+    renterId = r.id;
+    await admin.fails('POST', '/api/renters', { name: '' }, '名稱');
+    // 合約生效前不可租
+    await admin.fails('POST', '/api/room-bookings', {
+      renter_id: renterId, room_id: roomId, date: addDays(monday, -5),
+      start_time: '09:00', end_time: '11:00'
+    }, '合約');
+    // 合約到期後不可租
+    await admin.fails('POST', '/api/room-bookings', {
+      renter_id: renterId, room_id: roomId, date: addDays(monday, 90),
+      start_time: '09:00', end_time: '11:00'
+    }, '到期');
+  });
+  await test('租借計價：時數 × 費率，費率順序為本次 > 租用人 > 空間', async () => {
+    const d = addDays(monday, 10);
+    const b = await admin.ok('POST', '/api/room-bookings', {
+      renter_id: renterId, room_id: roomId, date: d, start_time: '18:00', end_time: '20:30',
+      purpose: '員工壓力管理課程'
+    });
+    equal(b.hours, 2.5, '時數');
+    equal(b.amount, 2500, '金額＝2.5 小時 × 租用人費率 1000');
+    const b2 = await admin.ok('POST', '/api/room-bookings', {
+      renter_id: renterId, room_id: roomId, date: addDays(d, 1), start_time: '18:00', end_time: '19:00', rate: 1200
+    });
+    equal(b2.amount, 1200, '本次費率優先');
+  });
+  await test('雙向衝突：租借擋諮商、諮商也擋租借；虛擬空間不擋', async () => {
+    const d = addDays(monday, 10);
+    // 同一間房、同一時段要排諮商，應被租借擋下
+    await admin.fails('POST', '/api/appointments', {
+      client_id: clientId, counselor_id: 2, room_id: roomId, date: d, start_time: '18:00'
+    }, '場地租借');
+    // 反向：先排諮商，再排租借
+    const d2 = addDays(monday, 11);
+    await admin.ok('POST', '/api/appointments', {
+      client_id: clientId, counselor_id: 2, room_id: roomId, date: d2, start_time: '09:00'
+    });
+    await admin.fails('POST', '/api/room-bookings', {
+      renter_id: renterId, room_id: roomId, date: d2, start_time: '09:00', end_time: '10:00'
+    }, '諮商預約');
+    // 虛擬空間可重複使用
+    const v1 = await admin.ok('POST', '/api/room-bookings', {
+      renter_id: renterId, room_id: virtualRoomId, date: d2, start_time: '14:00', end_time: '15:00'
+    });
+    const v2 = await admin.ok('POST', '/api/room-bookings', {
+      renter_id: renterId, room_id: virtualRoomId, date: d2, start_time: '14:00', end_time: '15:00'
+    });
+    assert(v1.id && v2.id, '虛擬空間不應互相衝突');
+  });
+  await test('租借不進個案系統，也不計入諮商統計', async () => {
+    const month = addDays(monday, 10).slice(0, 7);
+    const rep = await admin.ok('GET', `/api/reports?month=${month}`);
+    const rentalHours = (await admin.ok('GET', `/api/rentals/statement?month=${month}`)).total.hours;
+    assert(rentalHours > 0, '該月應有租借時數');
+    // 諮商統計的完成數不應包含租借
+    const done = rep.by_counselor.reduce((n, c) => n + c.done, 0);
+    const appts = await admin.ok('GET', `/api/appointments?from=${month}-01&to=${month}-31`);
+    equal(done, appts.filter(a => a.status === 'done').length, '諮商統計只算諮商預約');
+    // 租借也不會產生個案
+    const clients = await admin.ok('GET', '/api/clients?q=冒煙企業');
+    equal(clients.length, 0, '租用人不應變成個案');
+  });
+  await test('月結對帳單與結算後鎖定', async () => {
+    const month = addDays(monday, 10).slice(0, 7);
+    const st = await admin.ok('GET', `/api/rentals/statement?month=${month}&renter_id=${renterId}`);
+    const g = st.groups[0];
+    assert(g && g.rows.length >= 2, '應有租借明細');
+    equal(g.amount, g.rows.reduce((n, r) => n + r.amount, 0), '合計金額');
+    const out = await admin.ok('POST', '/api/rentals/settle', { renter_id: renterId, month });
+    assert(out.settled >= 2, '應結算多筆');
+    const after = await admin.ok('GET', `/api/rentals/statement?month=${month}&renter_id=${renterId}`);
+    equal(after.groups[0].settled, after.groups[0].amount, '結算後金額相符');
+    // 已結算不可改不可刪
+    const one = after.groups[0].rows[0];
+    await admin.fails('PUT', `/api/room-bookings/${one.id}`, { purpose: '改一下' }, '已結算');
+    await admin.fails('DELETE', `/api/room-bookings/${one.id}`, undefined, '已結算');
+  });
+  await test('空間佔用檢視同時顯示諮商與租借，且不含個案姓名', async () => {
+    const d = addDays(monday, 11);
+    const occ = await admin.ok('GET', `/api/rooms/occupancy?date=${d}`);
+    assert(occ.office_hours.includes('-'), '應回傳營業時段');
+    equal(occ.slot_minutes, 30, '30 分鐘刻度');
+    const room = occ.rooms.find(r => r.id === roomId);
+    assert(room.appointments.length >= 1, '應顯示諮商佔用');
+    assert(!JSON.stringify(occ).includes('冒煙測試個案'), '空間檢視不應出現個案姓名');
+  });
+
   // ---------------------------------------------------------------- 排班與產能
   section('可預約時段提交核定、產能與請假異動');
   let subId;
