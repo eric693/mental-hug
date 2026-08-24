@@ -68,7 +68,7 @@ const UI = {
     const { type = 'text', value = '', placeholder = '', required = false, full = false, step, min, max } = opts;
     return `<div class="form-row${full ? ' full' : ''}">
       <label>${UI.esc(label)}${required ? ' *' : ''}</label>
-      <input name="${name}" type="${type}" value="${UI.esc(value)}" placeholder="${UI.esc(placeholder)}"${step ? ` step="${step}"` : ''}${min !== undefined ? ` min="${min}"` : ''}${max !== undefined ? ` max="${max}"` : ''}>
+      <input id="${name}" name="${name}" type="${type}" value="${UI.esc(value)}" placeholder="${UI.esc(placeholder)}"${step ? ` step="${step}"` : ''}${min !== undefined ? ` min="${min}"` : ''}${max !== undefined ? ` max="${max}"` : ''}>
     </div>`;
   },
   select(name, label, options, opts = {}) {
@@ -77,23 +77,23 @@ const UI = {
       const [v, t] = Array.isArray(o) ? o : [o, o];
       return `<option value="${UI.esc(v)}"${String(v) === String(value) ? ' selected' : ''}>${UI.esc(t)}</option>`;
     }).join('');
-    return `<div class="form-row${full ? ' full' : ''}"><label>${UI.esc(label)}</label><select name="${name}">${inner}</select></div>`;
+    return `<div class="form-row${full ? ' full' : ''}"><label>${UI.esc(label)}</label><select id="${name}" name="${name}">${inner}</select></div>`;
   },
   inputList(name, label, options, opts = {}) {
     const { value = '', placeholder = '', full = false } = opts;
     const listId = `dl-${name}-${Math.random().toString(36).slice(2, 7)}`;
     return `<div class="form-row${full ? ' full' : ''}"><label>${UI.esc(label)}</label>
-      <input name="${name}" list="${listId}" value="${UI.esc(value)}" placeholder="${UI.esc(placeholder)}">
+      <input id="${name}" name="${name}" list="${listId}" value="${UI.esc(value)}" placeholder="${UI.esc(placeholder)}">
       <datalist id="${listId}">${options.map(o => `<option value="${UI.esc(o)}"></option>`).join('')}</datalist></div>`;
   },
   textarea(name, label, opts = {}) {
     const { value = '', full = true, placeholder = '', rows } = opts;
     return `<div class="form-row${full ? ' full' : ''}"><label>${UI.esc(label)}</label>
-      <textarea name="${name}"${rows ? ` style="min-height:${rows * 22}px"` : ''} placeholder="${UI.esc(placeholder)}">${UI.esc(value)}</textarea></div>`;
+      <textarea id="${name}" name="${name}"${rows ? ` style="min-height:${rows * 22}px"` : ''} placeholder="${UI.esc(placeholder)}">${UI.esc(value)}</textarea></div>`;
   },
   checkbox(name, label, checked) {
     return `<div class="form-row full"><label style="display:flex;gap:8px;align-items:center;font-size:14px;color:var(--text)">
-      <input name="${name}" type="checkbox"${checked ? ' checked' : ''} style="width:auto">${UI.esc(label)}</label></div>`;
+      <input id="${name}" name="${name}" type="checkbox"${checked ? ' checked' : ''} style="width:auto">${UI.esc(label)}</label></div>`;
   },
   formData(el) {
     const out = {};
@@ -101,6 +101,32 @@ const UI = {
       out[i.name] = i.type === 'checkbox' ? i.checked : i.value.trim();
     });
     return out;
+  },
+
+  // 表格即時篩選：資料已經整批載入的頁面（分級、績效、同意書…）用這個就夠，
+  // 不必為了搜尋再打一次 API。輸入即隱藏不符的列，並回報剩幾筆。
+  tableFilter(inputId, scopeEl, opts = {}) {
+    setTimeout(() => {
+      const input = document.getElementById(inputId);
+      if (!input) return;
+      const root = scopeEl || document;
+      const run = () => {
+        const kw = input.value.trim().toLowerCase();
+        let shown = 0, total = 0;
+        root.querySelectorAll('table.list tbody tr').forEach(tr => {
+          total++;
+          const hit = !kw || tr.textContent.toLowerCase().includes(kw);
+          tr.style.display = hit ? '' : 'none';
+          if (hit) shown++;
+        });
+        const out = document.getElementById(inputId + '-count');
+        if (out) out.textContent = kw ? `符合 ${shown} / ${total} 筆` : `共 ${total} 筆`;
+      };
+      input.oninput = () => { clearTimeout(input._t); input._t = setTimeout(run, 150); };
+      run();
+    }, 0);
+    return `<input id="${inputId}" class="search-box" placeholder="${UI.esc(opts.placeholder || '搜尋')}">
+      <span id="${inputId}-count" style="font-size:12.5px;color:var(--muted)"></span>`;
   },
 
   // 分頁列：資料量大的清單共用。onGo(page) 由呼叫端重新查詢。

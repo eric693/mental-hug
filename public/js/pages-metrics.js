@@ -236,7 +236,8 @@ App.page('staff-metrics', {
               比例低代表獲客高度依賴個人品牌，該員離開時個案容易一起流失。</div>
           </div></div>`;
     };
-    el.innerHTML = `<div class="toolbar">
+    el.innerHTML = `<div class="toolbar" style="flex-wrap:wrap;gap:8px">
+        ${UI.tableFilter('smq', el, { placeholder: '搜尋心理師' })}
         <input type="month" id="m" value="${UI.today().slice(0, 7)}">
         <div class="spacer"></div>
         <button class="btn secondary" onclick="window.print()">列印</button></div>

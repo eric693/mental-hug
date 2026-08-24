@@ -124,7 +124,8 @@ App.page('split-rules', {
       });
     };
 
-    el.innerHTML = `<div class="toolbar">
+    el.innerHTML = `<div class="toolbar" style="flex-wrap:wrap;gap:8px">
+        ${UI.tableFilter('srq', el, { placeholder: '搜尋規則名稱／條件' })}
         <div class="spacer"></div>
         <button class="btn secondary" id="sim">試算模擬器</button>
         <button class="btn" id="add">新增規則</button></div>
@@ -217,7 +218,8 @@ App.page('settlement', {
         };
       });
     };
-    el.innerHTML = `<div class="toolbar">
+    el.innerHTML = `<div class="toolbar" style="flex-wrap:wrap;gap:8px">
+        ${UI.tableFilter('stq', el, { placeholder: '搜尋心理師／個案／規則' })}
         <input type="month" id="m" value="${UI.today().slice(0, 7)}">
         <div class="spacer"></div>
         <button class="btn secondary" id="recalc">重算本月</button>

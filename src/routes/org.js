@@ -1,6 +1,6 @@
 const express = require('express');
 const bcrypt = require('bcryptjs');
-const { db, audit, today, addDays, getSetting, setSetting, listSetting, listQuery, UI_TEXT_KEYS } = require('../db');
+const { db, audit, today, addDays, getSetting, setSetting, listSetting, listQuery, pageHeaders, UI_TEXT_KEYS } = require('../db');
 const { requireStaff, requireAdmin, MODULES, MODULE_KEYS, ROLE_DEFAULT_MODULES, parsePermissions } = require('../auth');
 const { SCALE_KEYS } = require('../scales');
 const { withReportState } = require('./risk');
@@ -287,11 +287,25 @@ router.get('/meta', requireStaff(), (req, res) => {
 
 // ---- 帳號 ----
 router.get('/users', requireStaff('users'), (req, res) => {
-  res.json(db.prepare(`SELECT id, username, name, role, title, license_type, license_no, license_expiry,
-      specialty, phone, email, meeting_room_url, is_intern, supervisor_id, permissions, active,
-      (SELECT name FROM users s WHERE s.id = users.supervisor_id) AS supervisor_name
-    FROM users ORDER BY active DESC, id`)
-    .all().map(u => ({ ...u, permissions: parsePermissions(u.permissions) })));
+  const where = [], args = [];
+  if (req.query.role) { where.push('u.role = ?'); args.push(String(req.query.role)); }
+  if (req.query.active === '1') where.push('u.active = 1');
+  if (req.query.site_id) {
+    where.push('EXISTS (SELECT 1 FROM user_sites us WHERE us.user_id = u.id AND us.site_id = ?)');
+    args.push(Number(req.query.site_id));
+  }
+  const page = listQuery({
+    select: `u.id, u.username, u.name, u.role, u.title, u.license_type, u.license_no, u.license_expiry,
+      u.specialty, u.phone, u.email, u.meeting_room_url, u.is_intern, u.supervisor_id, u.permissions,
+      u.active, u.contract_type, u.hire_date, u.target_utilization,
+      (SELECT name FROM users s WHERE s.id = u.supervisor_id) AS supervisor_name`,
+    from: 'users u', where, args,
+    search: String(req.query.q || ''),
+    searchFields: ['u.name', 'u.username', 'u.license_no', 'u.specialty', 'u.phone', 'u.email'],
+    order: 'u.active DESC, u.id',
+    page: req.query.page, size: Number(req.query.size) || 500, maxSize: 1000
+  });
+  res.json(pageHeaders(res, page).map(u => ({ ...u, permissions: parsePermissions(u.permissions) })));
 });
 
 const USER_FIELDS = ['name', 'role', 'title', 'license_type', 'license_no', 'license_expiry', 'specialty',
@@ -416,8 +430,18 @@ router.put('/settings', requireStaff('settings'), (req, res) => {
 
 // ---- 公告 ----
 router.get('/announcements', requireStaff(), (req, res) => {
-  res.json(db.prepare(`SELECT a.*, u.name AS author FROM announcements a
-    LEFT JOIN users u ON u.id = a.created_by ORDER BY a.pinned DESC, a.publish_date DESC, a.id DESC LIMIT 100`).all());
+  const where = [], args = [];
+  if (req.query.audience) { where.push('a.audience = ?'); args.push(String(req.query.audience)); }
+  const page = listQuery({
+    select: 'a.*, u.name AS author',
+    from: 'announcements a LEFT JOIN users u ON u.id = a.created_by',
+    where, args,
+    search: String(req.query.q || ''),
+    searchFields: ['a.title', 'a.content'],
+    order: 'a.pinned DESC, a.publish_date DESC, a.id DESC',
+    page: req.query.page, size: Number(req.query.size) || 100, maxSize: 300
+  });
+  res.json(pageHeaders(res, page));
 });
 router.post('/announcements', requireStaff('announcements'), (req, res) => {
   const { title = '', content = '', audience = 'all', pinned = 0, publish_date = today() } = req.body || {};

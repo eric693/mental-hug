@@ -68,7 +68,8 @@ App.page('client-tiers', {
         b.onclick = () => { el.querySelector('#tier').value = b.dataset.t; draw(); };
       });
     };
-    el.innerHTML = `<div class="toolbar">
+    el.innerHTML = `<div class="toolbar" style="flex-wrap:wrap;gap:8px">
+        ${UI.tableFilter('tierq', el, { placeholder: '搜尋個案／主責心理師' })}
         ${UI.select('tier', '等級', [['', '全部']].concat(Object.entries({
     vip: '長期穩定', regular: '固定', watch: '觀察', new: '新收',
     dormant: '沉睡', attention: '需關注', closed: '已結案'

@@ -1036,8 +1036,17 @@ db.exec(`CREATE TABLE IF NOT EXISTS refunds (
 );
 CREATE INDEX IF NOT EXISTS idx_refund_client ON refunds(client_id, date);`);
 
+// 分頁標頭：回應本體維持原本的陣列，總數放標頭，既有呼叫端不必改
+function pageHeaders(res, page) {
+  res.set('X-Total-Count', String(page.total));
+  res.set('X-Page', String(page.page));
+  res.set('X-Page-Size', String(page.size));
+  res.set('X-Page-Count', String(page.pages));
+  return page.rows;
+}
+
 module.exports = {
-  db, SECRET, DATA_DIR, UPLOAD_DIR, getSetting, setSetting, listSetting, audit,
+  db, SECRET, pageHeaders, DATA_DIR, UPLOAD_DIR, getSetting, setSetting, listSetting, audit,
   today, nowTime, nowStamp, addDays, ageYears, nextClientCode, UI_TEXT_KEYS,
   listQuery, listParams
 };

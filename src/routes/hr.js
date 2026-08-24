@@ -1,5 +1,5 @@
 const express = require('express');
-const { db, audit, today, addDays, getSetting, listSetting } = require('../db');
+const { db, audit, today, addDays, getSetting, listSetting, listQuery, pageHeaders } = require('../db');
 const { requireStaff } = require('../auth');
 
 const router = express.Router();
@@ -12,9 +12,31 @@ router.get('/time-off', requireStaff('hr'), (req, res) => {
   const where = ['t.end_date >= ?'], args = [from];
   if (to) { where.push('t.start_date <= ?'); args.push(to); }
   if (counselor_id) { where.push('t.counselor_id = ?'); args.push(Number(counselor_id)); }
-  res.json(db.prepare(`SELECT t.*, u.name AS counselor_name FROM time_off t
-    JOIN users u ON u.id = t.counselor_id WHERE ${where.join(' AND ')}
-    ORDER BY t.start_date`).all(...args));
+  const page = listQuery({
+    select: 't.*, u.name AS counselor_name',
+    from: 'time_off t JOIN users u ON u.id = t.counselor_id',
+    where, args,
+    search: String(req.query.q || ''),
+    searchFields: ['u.name', 't.reason'],
+    order: 't.start_date',
+    page: req.query.page, size: Number(req.query.size) || 200, maxSize: 500
+  });
+  res.json(pageHeaders(res, page));
+});
+
+// 修改請假（日期或事由填錯時）
+router.put('/time-off/:id', requireStaff('hr'), (req, res) => {
+  const t = db.prepare('SELECT * FROM time_off WHERE id = ?').get(req.params.id);
+  if (!t) return res.status(404).json({ error: '找不到此請假紀錄' });
+  const b = { ...t, ...req.body };
+  if (b.end_date < b.start_date) return res.status(400).json({ error: '結束日不可早於起始日' });
+  db.prepare(`UPDATE time_off SET start_date = ?, end_date = ?, all_day = ?, start_time = ?,
+      end_time = ?, reason = ?, resolved = ? WHERE id = ?`)
+    .run(b.start_date, b.end_date, b.all_day ? 1 : 0, b.all_day ? '' : (b.start_time || ''),
+      b.all_day ? '' : (b.end_time || ''), b.reason || '',
+      req.body.resolved === undefined ? t.resolved : (req.body.resolved ? 1 : 0), t.id);
+  audit('staff', req.user.id, req.user.name, '修改請假紀錄', String(t.id));
+  res.json({ ok: true });
 });
 
 router.post('/time-off', requireStaff('hr'), (req, res) => {
@@ -160,6 +182,10 @@ router.get('/payouts', requireStaff('payouts'), (req, res) => {
   if (status) { where.push('p.status = ?'); args.push(status); }
   // 行政人員只看得到自己的報酬明細
   if (req.user.role === 'staff') { where.push('p.user_id = ?'); args.push(req.user.id); }
+  if (req.query.q) {
+    where.push('(u.name LIKE ? OR p.item LIKE ?)');
+    args.push(`%${req.query.q}%`, `%${req.query.q}%`);
+  }
   const rows = db.prepare(`SELECT p.*, u.name AS user_name, u.license_type
     FROM payouts p JOIN users u ON u.id = p.user_id
     ${where.length ? 'WHERE ' + where.join(' AND ') : ''}

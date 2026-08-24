@@ -39,7 +39,8 @@ App.page('partners', {
   module: 'partners',
   async render(el) {
     const [partners, settlements] = await Promise.all([GET('/partners'), GET('/settlements')]);
-    el.innerHTML = `<div class="toolbar"><div class="spacer"></div>
+    el.innerHTML = `<div class="toolbar" style="flex-wrap:wrap;gap:8px">
+        ${UI.tableFilter('ptq', el, { placeholder: '搜尋單位／聯絡人' })}<div class="spacer"></div>
         <button class="btn secondary" id="gen">產生月結請款單</button>
         <button class="btn" id="add">新增合作單位</button></div>
       <div class="card"><h3>合作單位</h3>
@@ -189,11 +190,13 @@ App.page('hr', {
     // 繼續教育關閉時只留請假，仍照常取 ce 資料會浪費一次查詢，故條件取用
     const withCe = App.feature('ce');
     const [offs, ce, list] = await Promise.all([
-      GET('/time-off'),
+      GET('/time-off?size=200'),
       withCe ? GET('/ce-summary') : Promise.resolve({ rows: [], cycle: 0, required: 0, required_special: 0, required_ethics: 0 }),
       withCe ? GET('/ce-credits') : Promise.resolve([])
     ]);
-    el.innerHTML = `<div class="toolbar"><div class="spacer"></div>
+    el.innerHTML = `<div class="toolbar" style="flex-wrap:wrap;gap:8px">
+        ${UI.tableFilter('hrq', el, { placeholder: '搜尋心理師／事由' })}
+        <div class="spacer"></div>
         <button class="btn secondary" id="addoff">登錄請假</button>
         ${withCe ? '<button class="btn" id="addce">登錄積分</button>' : ''}</div>
       ${withCe ? `<div class="card"><h3>執照與繼續教育（每 ${ce.cycle} 年需 ${ce.required} 點，其中品質／倫理／法規合計 ${ce.required_special} 點、專業倫理另需 ${ce.required_ethics} 點）</h3>
@@ -405,7 +408,8 @@ App.page('payouts', {
       });
     };
 
-    el.innerHTML = `<div class="toolbar">
+    el.innerHTML = `<div class="toolbar" style="flex-wrap:wrap;gap:8px">
+        ${UI.tableFilter('poq', el, { placeholder: '搜尋心理師／項目' })}
         <label>月份</label><input id="m" type="month" value="${UI.thisMonth()}">
         <select id="st"><option value="">全部</option><option value="pending">待付款</option><option value="paid">已付款</option></select>
         <div class="spacer"></div>

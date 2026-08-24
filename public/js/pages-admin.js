@@ -62,8 +62,10 @@ App.page('assessments', {
   sub: '篩檢分數僅供臨床判讀參考，不等同診斷',
   module: 'assessments',
   async render(el) {
-    const [rows, tasks] = await Promise.all([GET('/assessments'), GET('/assessment-tasks?pending=1')]);
-    el.innerHTML = `<div class="toolbar"><div class="spacer"></div>
+    const [rows, tasks] = await Promise.all([GET('/assessments?size=200'), GET('/assessment-tasks?pending=1')]);
+    el.innerHTML = `<div class="toolbar" style="flex-wrap:wrap;gap:8px">
+        ${UI.tableFilter('asq', el, { placeholder: '搜尋個案／量表／備註' })}
+        <div class="spacer"></div>
         <button class="btn" id="fill">填寫量表</button></div>
       ${tasks.length ? `<div class="card"><h3>待填任務（個案端）</h3>
         ${UI.table(['個案', '量表', '期限', '指派者', ''], tasks.map(t => `<tr>
@@ -697,7 +699,9 @@ App.page('messages', {
   module: 'messages',
   async render(el) {
     const list = await GET('/messages');
-    el.innerHTML = `<div class="card"><h3>對話</h3>
+    el.innerHTML = `<div class="toolbar" style="flex-wrap:wrap;gap:8px">
+        ${UI.tableFilter('msq', el, { placeholder: '搜尋個案／訊息' })}<div class="spacer"></div></div>
+      <div class="card"><h3>對話</h3>
       ${UI.table(['個案', '最後訊息', '時間', ''], list.map(m => `<tr>
         <td>${UI.esc(m.client_name)}（${m.client_code}）${m.unread ? UI.tag(m.unread + ' 未讀', 'danger') : ''}</td>
         <td>${UI.esc((m.last_content || '').slice(0, 30))}</td><td>${UI.esc(m.last_at || '')}</td>
@@ -730,9 +734,21 @@ App.page('announcements', {
   title: '公告',
   module: 'announcements',
   async render(el) {
-    const rows = await GET('/announcements');
-    el.innerHTML = `<div class="toolbar"><div class="spacer"></div><button class="btn" id="add">新增公告</button></div>
-      <div class="card">${UI.table(['日期', '標題', '對象', '發布者', ''], rows.map(a => `<tr>
+    const load = async () => {
+      const q = new URLSearchParams({
+        q: (el.querySelector('#aq') || {}).value || '',
+        audience: (el.querySelector('#aud') || {}).value || '',
+        size: 100
+      });
+      return GET('/announcements?' + q.toString());
+    };
+    const rows = await GET('/announcements?size=100');
+    el.innerHTML = `<div class="toolbar" style="flex-wrap:wrap;gap:8px">
+        <input id="aq" class="search-box" placeholder="搜尋標題／內容">
+        <select id="aud"><option value="">全部對象</option><option value="all">全部</option>
+          <option value="staff">所內</option><option value="client">個案</option></select>
+        <div class="spacer"></div><button class="btn" id="add">新增公告</button></div>
+      <div class="card" id="annlist">${UI.table(['日期', '標題', '對象', '發布者', ''], rows.map(a => `<tr>
         <td>${a.publish_date}</td><td>${a.pinned ? '📌 ' : ''}${UI.esc(a.title)}</td>
         <td>${({ all: '全部', staff: '所內', client: '個案' })[a.audience]}</td>
         <td>${UI.esc(a.author || '')}</td>
@@ -744,20 +760,38 @@ App.page('announcements', {
         ${UI.input('publish_date', '發布日', { type: 'date', value: a ? a.publish_date : UI.today() })}
         ${UI.checkbox('pinned', '置頂', a ? a.pinned : false)}
         ${UI.textarea('content', '內容', { value: a ? a.content : '' })}</div>`;
+    const redrawAnn = async () => {
+      const list = await load();
+      el.querySelector('#annlist').innerHTML = UI.table(['日期', '標題', '對象', '發布者', ''], list.map(a => `<tr>
+        <td>${a.publish_date}</td><td class="wrap">${a.pinned ? '📌 ' : ''}${UI.esc(a.title)}</td>
+        <td>${({ all: '全部', staff: '所內', client: '個案' })[a.audience]}</td>
+        <td>${UI.esc(a.author || '')}</td>
+        <td style="white-space:nowrap"><button class="btn tiny secondary" data-e="${a.id}">編輯</button>
+          <button class="btn tiny danger" data-d="${a.id}">刪除</button></td></tr>`), '尚無公告');
+      bindAnn(list);
+    };
+    const bindAnn = list => {
+      el.querySelectorAll('[data-e]').forEach(b => {
+        const a = list.find(x => x.id === Number(b.dataset.e));
+        b.onclick = () => UI.modal({
+          title: '編輯公告', body: form(a),
+          onSubmit: async e => { await PUT(`/announcements/${a.id}`, UI.formData(e)); redrawAnn(); }
+        });
+      });
+      el.querySelectorAll('[data-d]').forEach(b => {
+        b.onclick = async () => {
+          if (await UI.confirm('刪除此公告？')) { await DEL(`/announcements/${b.dataset.d}`); redrawAnn(); }
+        };
+      });
+    };
+    const aq = el.querySelector('#aq');
+    aq.oninput = () => { clearTimeout(aq._t); aq._t = setTimeout(redrawAnn, 300); };
+    el.querySelector('#aud').onchange = redrawAnn;
     el.querySelector('#add').onclick = () => UI.modal({
       title: '新增公告', body: form(null),
-      onSubmit: async e => { await POST('/announcements', UI.formData(e)); App.go('announcements'); }
+      onSubmit: async e => { await POST('/announcements', UI.formData(e)); redrawAnn(); }
     });
-    el.querySelectorAll('[data-e]').forEach(b => {
-      const a = rows.find(x => x.id === Number(b.dataset.e));
-      b.onclick = () => UI.modal({
-        title: '編輯公告', body: form(a),
-        onSubmit: async e => { await PUT(`/announcements/${a.id}`, UI.formData(e)); App.go('announcements'); }
-      });
-    });
-    el.querySelectorAll('[data-d]').forEach(b => {
-      b.onclick = async () => { if (await UI.confirm('刪除此公告？')) { await DEL(`/announcements/${b.dataset.d}`); App.go('announcements'); } };
-    });
+    bindAnn(rows);
   }
 });
 
@@ -870,7 +904,7 @@ App.page('users', {
   sub: '行政人員預設不含晤談紀錄與危機事件模組',
   module: 'users',
   async render(el) {
-    const users = await GET('/users');
+    const users = await GET('/users?size=500');
     const modules = App.meta.modules || [];
     const form = u => `<div class="form-grid">
         ${u ? '' : UI.input('username', '帳號', { required: true })}
@@ -918,8 +952,22 @@ App.page('users', {
       }
       App.go('users');
     };
-    el.innerHTML = `<div class="toolbar"><div class="spacer"></div><button class="btn" id="add">新增帳號</button></div>
-      <div class="card">${UI.table(['帳號', '姓名', '角色', '證照', '督導', '權限數', '狀態', ''], users.map(u => `<tr>
+    el.innerHTML = `<div class="toolbar" style="flex-wrap:wrap;gap:8px">
+        <input id="uq" class="search-box" placeholder="搜尋姓名／帳號／證書字號／專長">
+        <select id="urole"><option value="">全部角色</option>
+          ${App.enumOptions('role').map(o => `<option value="${o[0]}">${o[1]}</option>`).join('')}</select>
+        <label style="font-size:13px;display:flex;gap:5px;align-items:center">
+          <input type="checkbox" id="uactive" style="width:auto" checked>只看啟用中</label>
+        <div class="spacer"></div><button class="btn" id="add">新增帳號</button></div>
+      <div class="card">${UI.table(['帳號', '姓名', '角色', '證照', '督導', '權限數', '狀態', ''], users
+    .filter(u => {
+      const kw = (el._uq || '').trim();
+      const role = el._urole || '';
+      if (el._uactive !== false && !u.active) return false;
+      if (role && u.role !== role) return false;
+      if (!kw) return true;
+      return [u.name, u.username, u.license_no, u.specialty].some(v => String(v || '').includes(kw));
+    }).map(u => `<tr>
         <td>${UI.esc(u.username)}</td>
         <td>${UI.esc(u.name)}${u.is_intern ? ' ' + UI.tag('實習', 'warn') : ''}</td>
         <td>${UI.esc(TW.role[u.role] || u.role)}</td>
@@ -931,6 +979,13 @@ App.page('users', {
           <button class="btn tiny danger" data-ud="${u.id}">刪除</button></td></tr>`))}</div>
       <div style="font-size:12.5px;color:var(--muted);margin-top:8px">
         已有預約、晤談紀錄、主責個案或報酬單的帳號不會真的刪除，會改為停用以保留歷史資料。</div>`;
+    const uq = el.querySelector('#uq');
+    uq.value = el._uq || '';
+    el.querySelector('#urole').value = el._urole || '';
+    el.querySelector('#uactive').checked = el._uactive !== false;
+    uq.oninput = () => { clearTimeout(uq._t); uq._t = setTimeout(() => { el._uq = uq.value; App.go('users'); }, 350); };
+    el.querySelector('#urole').onchange = e2 => { el._urole = e2.target.value; App.go('users'); };
+    el.querySelector('#uactive').onchange = e2 => { el._uactive = e2.target.checked; App.go('users'); };
     el.querySelector('#add').onclick = () => UI.modal({ title: '新增帳號', wide: true, body: form(null), onSubmit: submit(null) });
     el.querySelectorAll('[data-ud]').forEach(b => {
       const u = users.find(x => x.id === Number(b.dataset.ud));
@@ -1235,7 +1290,9 @@ App.page('consents', {
     const [clients, templates] = await Promise.all([GET('/clients?status=active'), GET('/consent-templates')]);
     const details = await Promise.all(clients.map(c => GET(`/clients/${c.id}`)));
     const required = templates.filter(t => t.required);
-    el.innerHTML = `<div class="card">${UI.table(
+    el.innerHTML = `<div class="toolbar" style="flex-wrap:wrap;gap:8px">
+        ${UI.tableFilter('csq', el, { placeholder: '搜尋個案／同意書' })}<div class="spacer"></div></div>
+      <div class="card">${UI.table(
       ['個案'].concat(required.map(t => t.title.slice(0, 8))),
       details.map(c => `<tr><td><a href="#client/${c.id}">${UI.esc(c.name)}（${c.code}）</a></td>
         ${required.map(t => {

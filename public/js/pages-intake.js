@@ -36,10 +36,13 @@ App.page('intake', {
   sub: '來電 → 評估派案 → 初談建檔；滿檔時列入候補',
   module: 'intake',
   async render(el) {
+    let page = 1;
     const draw = async () => {
       const status = el.querySelector('#st').value;
       const q = el.querySelector('#q').value.trim();
-      const rows = await GET(`/intakes?status=${status}&q=${encodeURIComponent(q)}`);
+      const d = await GETP(`/intakes?status=${status}&q=${encodeURIComponent(q)}`
+        + `&urgency=${el.querySelector('#ug') ? el.querySelector('#ug').value : ''}&page=${page}&size=50`);
+      const rows = d.rows;
       el.querySelector('#list').innerHTML = UI.table(
         ['登記時間', '等候', '姓名', '電話', '來源', '主訴', '希望時段', '指定／派案', '緊急', '問卷', '狀態', ''],
         rows.map(r => `<tr${r.urgency === 'high' ? ' style="background:var(--danger-bg)"' : ''}>
@@ -64,7 +67,7 @@ App.page('intake', {
               <button class="btn tiny danger" data-cl="${r.id}">結束</button>
               <button class="btn tiny danger" data-dl="${r.id}">刪除</button>` : `<a class="btn tiny secondary" href="#client/${r.client_id}">個案</a>`}
           </td></tr>`),
-        '沒有待處理的來電登記');
+        '沒有待處理的來電登記') + UI.pager(d, p => { page = p; draw(); });
 
       el.querySelectorAll('[data-e]').forEach(b => {
         b.onclick = () => intakeDialog(rows.find(r => r.id === Number(b.dataset.e)), draw);
@@ -187,11 +190,15 @@ App.page('intake', {
           <option value="new">待處理</option><option value="waiting">候補中</option>
           <option value="assigned">已派案</option><option value="converted">已建檔</option>
           <option value="closed">未成案</option></select>
-        <input id="q" placeholder="搜尋姓名／電話">
+        <select id="ug"><option value="">全部緊急度</option>
+          <option value="high">高</option><option value="normal">一般</option><option value="low">低</option></select>
+        <input id="q" class="search-box" placeholder="搜尋姓名／電話／主訴">
         <div class="spacer"></div><button class="btn" id="add">新增來電登記</button>
       </div><div id="list"></div>`;
-    el.querySelector('#st').onchange = draw;
-    el.querySelector('#q').oninput = () => { clearTimeout(el._t); el._t = setTimeout(draw, 300); };
+    const reset = () => { page = 1; draw(); };
+    el.querySelector('#st').onchange = reset;
+    el.querySelector('#ug').onchange = reset;
+    el.querySelector('#q').oninput = () => { clearTimeout(el._t); el._t = setTimeout(reset, 300); };
     el.querySelector('#add').onclick = () => intakeDialog(null, draw);
     await draw();
   }
@@ -388,7 +395,8 @@ App.page('intake-forms', {
         };
       });
     };
-    el.innerHTML = `<div class="toolbar">
+    el.innerHTML = `<div class="toolbar" style="flex-wrap:wrap;gap:8px">
+        ${UI.tableFilter('ifq', el, { placeholder: '搜尋姓名／電話' })}
         <select id="fst"><option value="">全部</option><option value="sent">等待填寫</option>
           <option value="done">已填待處理</option><option value="used">已建檔帶入</option></select>
         <div class="spacer"></div><button class="btn" id="newf">產生新問卷</button>

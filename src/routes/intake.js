@@ -1,6 +1,6 @@
 const express = require('express');
 const bcrypt = require('bcryptjs');
-const { db, audit, today, nowStamp, addDays, nextClientCode, ageYears, getSetting } = require('../db');
+const { db, audit, today, nowStamp, addDays, nextClientCode, ageYears, getSetting, listQuery, pageHeaders } = require('../db');
 const { requireStaff, rateLimit } = require('../auth');
 const { score, publicScales } = require('../scales');
 const { sendNotification } = require('../notify');
@@ -27,21 +27,32 @@ router.get('/intakes', requireStaff('intake'), (req, res) => {
   const where = [], args = [];
   if (status) { where.push('i.status = ?'); args.push(status); }
   else where.push("i.status IN ('new','waiting','assigned')");
-  if (q) { where.push('(i.name LIKE ? OR i.phone LIKE ?)'); args.push(`%${q}%`, `%${q}%`); }
-  res.json(db.prepare(`SELECT i.*, u.name AS assigned_name, p.name AS preferred_name,
+  if (req.query.urgency) { where.push('i.urgency = ?'); args.push(String(req.query.urgency)); }
+  if (req.query.counselor_id) {
+    where.push('(i.assigned_counselor_id = ? OR i.preferred_counselor_id = ?)');
+    args.push(Number(req.query.counselor_id), Number(req.query.counselor_id));
+  }
+  const page = listQuery({
+    select: `i.*, u.name AS assigned_name, p.name AS preferred_name,
       t.name AS taken_name, pa.name AS partner_name,
       CAST(julianday('now','localtime') - julianday(substr(i.created_at,1,10)) AS INTEGER) AS wait_days,
       (SELECT f.status FROM intake_forms f WHERE f.intake_id = i.id ORDER BY f.id DESC LIMIT 1) AS form_status,
       (SELECT f.bsrs_total FROM intake_forms f WHERE f.intake_id = i.id ORDER BY f.id DESC LIMIT 1) AS form_bsrs_total,
-      (SELECT f.bsrs_alert FROM intake_forms f WHERE f.intake_id = i.id ORDER BY f.id DESC LIMIT 1) AS form_bsrs_alert
-    FROM intakes i
-    LEFT JOIN users u ON u.id = i.assigned_counselor_id
-    LEFT JOIN users p ON p.id = i.preferred_counselor_id
-    LEFT JOIN users t ON t.id = i.taken_by
-    LEFT JOIN partners pa ON pa.id = i.partner_id
-    WHERE ${where.join(' AND ')}
-    ORDER BY i.urgency = 'high' DESC, i.created_at`).all(...args));
+      (SELECT f.bsrs_alert FROM intake_forms f WHERE f.intake_id = i.id ORDER BY f.id DESC LIMIT 1) AS form_bsrs_alert`,
+    from: `intakes i
+      LEFT JOIN users u ON u.id = i.assigned_counselor_id
+      LEFT JOIN users p ON p.id = i.preferred_counselor_id
+      LEFT JOIN users t ON t.id = i.taken_by
+      LEFT JOIN partners pa ON pa.id = i.partner_id`,
+    where, args,
+    search: String(q || ''),
+    searchFields: ['i.name', 'i.phone', 'i.issue', 'i.note'],
+    order: "i.urgency = 'high' DESC, i.created_at DESC",
+    page: req.query.page, size: Number(req.query.size) || 200, maxSize: 500
+  });
+  res.json(pageHeaders(res, page));
 });
+
 
 router.post('/intakes', requireStaff('intake'), (req, res) => {
   const d = pick(req.body);

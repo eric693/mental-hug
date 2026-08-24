@@ -1,5 +1,5 @@
 const express = require('express');
-const { db, audit, today } = require('../db');
+const { db, audit, today, listQuery, pageHeaders } = require('../db');
 const { requireStaff } = require('../auth');
 const { SCALE_KEYS, score, publicScales } = require('../scales');
 
@@ -13,10 +13,16 @@ router.get('/assessments', requireStaff('assessments'), (req, res) => {
   if (client_id) { where.push('a.client_id = ?'); args.push(Number(client_id)); }
   if (scale) { where.push('a.scale = ?'); args.push(scale); }
   if (alert) where.push('a.alert = 1');
-  res.json(db.prepare(`SELECT a.*, c.name AS client_name, c.code AS client_code
-    FROM assessments a JOIN clients c ON c.id = a.client_id
-    ${where.length ? 'WHERE ' + where.join(' AND ') : ''}
-    ORDER BY a.date DESC, a.id DESC LIMIT 300`).all(...args));
+  const page = listQuery({
+    select: 'a.*, c.name AS client_name, c.code AS client_code',
+    from: 'assessments a JOIN clients c ON c.id = a.client_id',
+    where, args,
+    search: String(req.query.q || ''),
+    searchFields: ['c.name', 'c.code', 'a.scale', 'a.note'],
+    order: 'a.date DESC, a.id DESC',
+    page: req.query.page, size: Number(req.query.size) || 200, maxSize: 500
+  });
+  res.json(pageHeaders(res, page));
 });
 
 router.get('/assessments/:id', requireStaff('assessments'), (req, res) => {
