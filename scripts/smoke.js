@@ -1670,6 +1670,100 @@ function startServer() {
     await lin.ok('DELETE', `/api/nonclient-services/${r.id}`);
   });
 
+  // ---------------------------------------------------------------- 財務與績效指標
+  section('財務指標與心理師績效（6.3／6.4）');
+  await test('療程包套按次攤提，不在購買當月整筆認列', async () => {
+    const month = today0.slice(0, 7);
+    const before = await admin.ok('GET', `/api/metrics/finance?month=${month}`);
+    // 買一個 4 次 8000 的方案
+    const p = await admin.ok('POST', '/api/packages',
+      { client_id: clientId, name: '冒煙攤提方案', sessions_total: 4, amount: 8000, start_date: today0 });
+    const mid = await admin.ok('GET', `/api/metrics/finance?month=${month}`);
+    equal(mid.all.package_recognized, before.all.package_recognized,
+      '購買當下不應認列方案收入（尚未使用）');
+    // 用掉一次
+    const a = await admin.ok('POST', '/api/appointments',
+      { client_id: clientId, counselor_id: 2, date: today0, start_time: '08:00', package_id: p.id });
+    await admin.ok('POST', `/api/appointments/${a.id}/status`, { status: 'done' });
+    const after = await admin.ok('GET', `/api/metrics/finance?month=${month}`);
+    equal(after.all.package_recognized - before.all.package_recognized, 2000,
+      '用一次應認列 8000 ÷ 4 = 2000');
+  });
+  await test('據點損益：貢獻毛利、總部分攤、稅前損益與 EBITDA', async () => {
+    const month = today0.slice(0, 7);
+    let sites = await admin.ok('GET', '/api/sites');
+    if (!sites.some(x => x.active)) await admin.ok('POST', '/api/sites', { name: '冒煙指標據點' });
+    sites = await admin.ok('GET', '/api/sites');
+    const s0 = sites.find(x => x.active);
+    await admin.ok('POST', '/api/cost-entries',
+      { month, site_id: s0.id, kind: 'direct', category: '租金', amount: 30000 });
+    await admin.ok('POST', '/api/cost-entries', { month, kind: 'overhead', category: '總部人事', amount: 20000 });
+    await admin.ok('POST', '/api/cost-entries',
+      { month, site_id: s0.id, kind: 'depreciation', category: '裝潢折舊', amount: 5000 });
+    await admin.fails('POST', '/api/cost-entries', { month, kind: 'direct', amount: 100 }, '歸屬');
+    await admin.fails('POST', '/api/cost-entries', { month, kind: 'direct', site_id: s0.id, amount: 0 }, '金額');
+
+    const d = await admin.ok('GET', `/api/metrics/finance?month=${month}`);
+    const r = d.rows.find(x => x.site_id === s0.id);
+    equal(r.direct_cost, 30000, '直接成本');
+    equal(r.contribution, r.revenue - r.direct_cost, '貢獻毛利＝營收 − 直接成本');
+    equal(r.pretax, r.contribution - r.overhead_share, '稅前損益＝貢獻毛利 − 總部分攤');
+    equal(r.ebitda, r.pretax + r.interest + r.depreciation + r.amortization, 'EBITDA 定義');
+    equal(d.overhead, 20000, '總部費用');
+    // 分攤總和不應超過總部費用
+    const shared = d.rows.reduce((n, x) => n + x.overhead_share, 0);
+    assert(shared <= d.overhead + 1, '分攤總和不應超過總部費用');
+  });
+  await test('總部分攤規則變更留紀錄，歷史月份套當時版本', async () => {
+    const before = await admin.ok('GET', '/api/overhead-rules');
+    await admin.ok('POST', '/api/overhead-rules',
+      { effective_from: today0.slice(0, 7), method: 'sessions', note: '改依服務量分攤' });
+    await admin.fails('POST', '/api/overhead-rules', { effective_from: '亂寫', method: 'equal' }, '格式');
+    const after = await admin.ok('GET', '/api/overhead-rules?month=' + today0.slice(0, 7));
+    equal(after.rows.length, before.rows.length + 1, '應新增一筆版本');
+    equal(after.current.method, 'sessions', '當月應套新規則');
+    // 更早的月份不受影響
+    const old = await admin.ok('GET', '/api/overhead-rules?month=2000-01');
+    equal(old.current.method, 'revenue', '歷史月份應維持預設／當時規則');
+  });
+  await test('應收帳齡依來源別分列 30／60／90／90+', async () => {
+    const d = await admin.ok('GET', `/api/metrics/finance?month=${today0.slice(0, 7)}`);
+    assert(Array.isArray(d.ar.rows), '應回傳帳齡表');
+    for (const r of d.ar.rows) {
+      equal(r.total, r['30'] + r['60'] + r['90'] + r['90+'], `${r.payer} 各期間加總應等於合計`);
+    }
+    equal(d.ar.total, d.ar.rows.reduce((n, r) => n + r.total, 0), '總額一致');
+  });
+  await test('人員績效：每小時實收、貢獻毛利、集中度與各項比率', async () => {
+    const month = addDays(monday, 77).slice(0, 7);
+    const d = await admin.ok('GET', '/api/metrics/staff?month=' + month);
+    assert(d.rows.length >= 1, '應有人員資料');
+    const r = d.rows[0];
+    equal(r.contribution, r.revenue - r.direct_cost, '貢獻毛利定義');
+    if (r.hours) equal(r.hourly_rate, Math.round(r.revenue / r.hours), '每小時實收＝營收 ÷ 時數');
+    // 累計佔比遞增且最後為 100
+    let prev = 0;
+    for (const x of d.rows) {
+      if (x.cumulative_share === null) continue;
+      assert(x.cumulative_share >= prev - 0.1, '累計佔比應遞增');
+      prev = x.cumulative_share;
+    }
+    if (d.total_revenue) assert(Math.abs(prev - 100) < 1, '累計佔比最後應接近 100%');
+    assert(typeof d.brand_acquisition.ratio !== 'undefined', '應有品牌獲客比例');
+    assert(d.retention.year, '應有留任率年度');
+  });
+  await test('爽約率與臨時取消率分開統計，未到不計入時數', async () => {
+    const month = addDays(monday, 41).slice(0, 7);
+    const d = await admin.ok('GET', '/api/metrics/staff?month=' + month);
+    const r = d.rows.find(x => x.id === 2);
+    assert(r, '應有該心理師');
+    assert(r.no_show >= 1, '該月應有未到紀錄');
+    assert(r.no_show_rate !== r.cancel_rate || r.no_show === r.cancelled, '兩個比率應各自計算');
+    // 未到不計入完成時數
+    const capacity = await admin.ok('GET', '/api/staffing/capacity?month=' + month);
+    equal(r.hours, capacity.rows.find(x => x.id === 2).done_hours, '時數口徑應與產能頁一致');
+  });
+
   // ---------------------------------------------------------------- 附件
   section('附件上傳與下載');
   let pngId, pdfId;

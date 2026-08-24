@@ -215,6 +215,50 @@ const UI = {
   // 長條圖（純 SVG，不引外部套件）。單一數列，故不需圖例；
   // 每根長條直接標數值，滑鼠移上去顯示完整說明（<title> 由瀏覽器代為浮動顯示）。
   // rows: [{ label, value, note }]；opts: { format, color, height, horizontal }
+  // 圓餅圖：看「組成比例」用。超過 6 項會把尾巴併成「其他」，
+  // 切太多片反而看不出主要來源是誰。
+  pieChart(rows, opts = {}) {
+    const list = (rows || []).filter(r => r && Number(r.value) > 0)
+      .sort((a, b) => Number(b.value) - Number(a.value));
+    if (!list.length) return `<div class="empty">${UI.esc(opts.empty || '目前沒有資料')}</div>`;
+    const max = opts.max || 6;
+    const shown = list.slice(0, max);
+    const rest = list.slice(max);
+    if (rest.length) {
+      shown.push({ label: '其他', value: rest.reduce((n, r) => n + Number(r.value), 0) });
+    }
+    const total = shown.reduce((n, r) => n + Number(r.value), 0);
+    const fmt = opts.format || (v => String(v));
+    // 品牌色系推導出的一組色階：同一個色相拉明度，列印成灰階仍分得出深淺
+    const COLORS = ['#4e5556', '#7d8688', '#a8b0b1', '#d98b78', '#eab5a5', '#c9d2d3', '#8f6f63'];
+    const R = 52, C = 60;
+    let acc = 0;
+    const arcs = shown.map((r, i) => {
+      const frac = Number(r.value) / total;
+      const a0 = acc * 2 * Math.PI - Math.PI / 2;
+      acc += frac;
+      const a1 = acc * 2 * Math.PI - Math.PI / 2;
+      const large = frac > 0.5 ? 1 : 0;
+      const x0 = C + R * Math.cos(a0), y0 = C + R * Math.sin(a0);
+      const x1 = C + R * Math.cos(a1), y1 = C + R * Math.sin(a1);
+      // 只有一項時畫整圓，避免起訖點重合導致 path 消失
+      const d = shown.length === 1
+        ? `M ${C} ${C - R} A ${R} ${R} 0 1 1 ${C - 0.01} ${C - R} Z`
+        : `M ${C} ${C} L ${x0} ${y0} A ${R} ${R} 0 ${large} 1 ${x1} ${y1} Z`;
+      return `<path d="${d}" fill="${COLORS[i % COLORS.length]}"><title>${UI.esc(r.label)}：${UI.esc(fmt(r.value))}（${Math.round(frac * 1000) / 10}%）</title></path>`;
+    }).join('');
+    const legend = shown.map((r, i) => `<div class="pie-item">
+        <span class="pie-dot" style="background:${COLORS[i % COLORS.length]}"></span>
+        <span class="pie-label">${UI.esc(r.label)}</span>
+        <span class="pie-val">${UI.esc(fmt(r.value))}　${Math.round(Number(r.value) / total * 1000) / 10}%</span>
+      </div>`).join('');
+    return `<div class="pie-wrap">
+      <svg viewBox="0 0 120 120" width="130" height="130" role="img"
+        aria-label="${UI.esc(opts.title || '圓餅圖')}">${arcs}</svg>
+      <div class="pie-legend">${legend}</div>
+    </div>`;
+  },
+
   barChart(rows, opts = {}) {
     const list = (rows || []).filter(r => r);
     if (!list.length) return `<div class="empty">${UI.esc(opts.empty || '目前沒有資料')}</div>`;

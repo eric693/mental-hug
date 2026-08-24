@@ -453,3 +453,11 @@ table.list tr:hover td { background: #f8fbfb; }
 .occ-appt { background: var(--primary) !important; }
 .occ-rent { background: var(--accent) !important; }
 .occ-key { display: inline-block; width: 14px; height: 14px; border-radius: 3px; vertical-align: -2px; }
+
+/* ---- 圓餅圖 ---- */
+.pie-wrap { display: flex; gap: 18px; align-items: center; flex-wrap: wrap; }
+.pie-legend { flex: 1; min-width: 200px; }
+.pie-item { display: flex; align-items: center; gap: 8px; font-size: 13px; padding: 3px 0; }
+.pie-dot { width: 11px; height: 11px; border-radius: 3px; flex: 0 0 11px; }
+.pie-label { flex: 1; }
+.pie-val { color: var(--muted); white-space: nowrap; }

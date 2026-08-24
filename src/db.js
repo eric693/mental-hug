@@ -356,6 +356,35 @@ ensureColumns('invoices', {
   client_project_id: 'INTEGER REFERENCES client_projects(id)'
 });
 
+// ---- 成本、總部分攤與財務指標（6.3）----
+// 損益要算得出來，成本就得有地方放。直接成本掛在據點（或人員），
+// 總部費用另立，再依「可設定且變更留紀錄」的規則分攤下去。
+db.exec(`CREATE TABLE IF NOT EXISTS cost_entries (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  month TEXT NOT NULL,                          -- 2026-08
+  site_id INTEGER REFERENCES sites(id),         -- 空＝總部費用
+  user_id INTEGER REFERENCES users(id),         -- 人員直接成本（含雇主負擔）時填
+  kind TEXT NOT NULL DEFAULT 'direct',
+  -- direct 據點直接成本／staff 人員直接成本／overhead 總部費用／
+  -- interest 利息／depreciation 折舊／amortization 攤銷
+  category TEXT NOT NULL DEFAULT '',            -- 租金／人事／水電／耗材／行銷…
+  amount INTEGER NOT NULL DEFAULT 0,
+  note TEXT NOT NULL DEFAULT '',
+  created_by INTEGER REFERENCES users(id),
+  created_at TEXT NOT NULL DEFAULT (datetime('now','localtime'))
+);
+CREATE INDEX IF NOT EXISTS idx_cost_month ON cost_entries(month, site_id);
+
+-- 總部分攤規則：規格要求可設定且變更留紀錄，所以做成版本，不是就地覆寫
+CREATE TABLE IF NOT EXISTS overhead_rules (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  effective_from TEXT NOT NULL,                 -- 自哪個月起適用
+  method TEXT NOT NULL DEFAULT 'revenue',       -- revenue 依營收／sessions 依服務量／headcount 依人數／equal 平均
+  note TEXT NOT NULL DEFAULT '',
+  created_by INTEGER REFERENCES users(id),
+  created_at TEXT NOT NULL DEFAULT (datetime('now','localtime'))
+);`);
+
 // ---- 分帳引擎（M6）----
 // 一條規則可以改很多次，但「已經拆過的帳不能被今天改的規則動到」，
 // 所以規則本身只是個殼，實際條件與比例放在版本裡；每一筆拆帳都鎖住當時的版本 id。
@@ -656,6 +685,8 @@ const UI_TEXT_KEYS = Object.keys(UI_TEXT_DEFAULTS);
     withholding_min: '20010',           // 單次給付達此金額才扣繳所得稅
     nhi_supplement_rate: '0.0211',
     nhi_supplement_min: '20000',        // 單次給付達此金額才扣補充保費
+    // 人員直接成本推估：沒有逐月登錄薪資時，以報酬 × 此倍率概估雇主負擔（勞健保、勞退）
+    employer_burden_rate: '0.18',
     // 對外提醒發送：填入 webhook 後由系統送出，留空則僅產生訊息供人工發送
     notify_webhook_url: '',
     notify_webhook_token: '',
