@@ -1,0 +1,66 @@
+<!DOCTYPE html>
+<html lang="zh-Hant-TW">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>線上繳費 — 擁抱心理</title>
+  <link rel="stylesheet" href="/css/style.css">
+  <meta name="theme-color" content="#4e5556">
+  <style>
+    body { background: #faf5f3; }
+    .pay-wrap { max-width: 520px; margin: 0 auto; padding: 0 0 40px; }
+    .pay-head { background: linear-gradient(140deg, #f4ccc3, #4e5556); color: #fff; padding: 24px 18px; }
+    .pay-head h1 { font-size: 19px; }
+    .pay-body { padding: 14px; }
+    .amount { font-size: 34px; font-weight: 700; text-align: center; margin: 10px 0 4px; }
+    .entity { text-align: center; color: var(--muted); font-size: 13.5px; }
+  </style>
+</head>
+<body>
+  <div id="app"></div>
+  <div id="toast"></div>
+  <script src="/js/api.js"></script>
+  <script src="/js/ui.js"></script>
+  <script>
+    // 公開收款頁：只顯示金額與收款主體，不含個案姓名與服務內容細節。
+    // 各據點是不同法律主體，這頁顯示的必定是該筆收費所屬主體的收款資訊。
+    (async () => {
+      const token = new URLSearchParams(location.search).get('t') || '';
+      const app = document.getElementById('app');
+      const fail = msg => {
+        app.innerHTML = `<div class="pay-wrap"><div class="pay-head"><h1>線上繳費</h1></div>
+          <div class="pay-body"><div class="card"><div class="notice danger">${UI.esc(msg)}</div></div></div></div>`;
+      };
+      let d;
+      try { d = await GET('/public/pay/' + encodeURIComponent(token)); }
+      catch (e) { return fail(e.message); }
+      const s = d.site || {};
+      app.innerHTML = `<div class="pay-wrap">
+        <div class="pay-head"><h1>${UI.esc(s.legal_entity || d.center_name || '線上繳費')}</h1>
+          <div style="font-size:13px;color:rgba(255,255,255,.9);margin-top:4px">${UI.esc(s.name || '')}</div></div>
+        <div class="pay-body">
+          <div class="card">
+            <div class="amount">${UI.fmtMoney(d.amount)}</div>
+            <div class="entity">${UI.esc(d.item || '心理諮商費用')}${d.date ? '　' + UI.esc(d.date) : ''}</div>
+            ${d.status === 'paid' ? '<div class="notice ok" style="margin-top:12px">此筆款項已完成繳納，感謝您。</div>' : ''}
+          </div>
+          <div class="card"><h3>付款方式</h3>
+            ${s.pay_link_base ? `<a class="btn" style="display:block;text-align:center" href="${UI.esc(s.pay_link_base)}"
+                target="_blank" rel="noopener">前往 ${UI.esc(s.pay_channel || '線上付款')}</a>`
+              : `<div style="font-size:14px;line-height:1.9">
+                  ${s.pay_channel ? `收款方式：${UI.esc(s.pay_channel)}<br>` : ''}
+                  ${s.pay_account ? `收款帳號：<strong>${UI.esc(s.pay_account)}</strong><br>` : ''}
+                  ${(!s.pay_channel && !s.pay_account)
+                    ? '本館線上收款尚未開通，請於到所時繳納，或來電確認匯款方式。' : ''}
+                </div>`}
+            <div style="font-size:12.5px;color:var(--muted);margin-top:10px">
+              繳費後請保留交易明細；收據將由本所開立
+              ${s.tax_id ? `（開立主體：${UI.esc(s.legal_entity)}，統編 ${UI.esc(s.tax_id)}）` : ''}。
+              ${s.phone ? `如有問題請來電 ${UI.esc(s.phone)}。` : ''}
+            </div>
+          </div>
+        </div></div>`;
+    })();
+  </script>
+</body>
+</html>

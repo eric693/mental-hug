@@ -114,6 +114,8 @@ app.use('/api', require('./routes/inquiries'));
 app.use('/api', require('./routes/split'));
 // 機構專案：主檔、個案額度與對帳單
 app.use('/api', require('./routes/projects'));
+// 收費對帳：自動確認與人工佇列、金流入帳、三方勾稽、收據雙版本與月度匯出
+app.use('/api', require('./routes/reconcile'));
 
 // 手動觸發備份與附件同步：換機、要立刻帶走資料，或剛上傳完重要附件時不必等排程。
 // 僅管理者可用，並回報備份檔與同步的附件數，方便確認真的做了。

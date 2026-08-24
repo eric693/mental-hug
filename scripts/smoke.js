@@ -212,6 +212,7 @@ function startServer() {
   // 基準日取兩週後的週一，與 seed 內建的請假（今天+4 天）錯開；
   // 其餘測試以此推算，避免彼此撞日：+7 收費、+14 個案端預約、+21 請假、+28 改期
   const monday = nextWeekday(1, 8);
+  const today0 = ymd(new Date());
   await test('整週排班存檔並合併重疊時段', async () => {
     const r = await lin.ok('POST', '/api/availability/bulk', {
       blocks: [
@@ -1034,6 +1035,100 @@ function startServer() {
     await lin.fails('POST', '/api/nonclient-services/migrate',
       { client_id: clientId, org_name: 'x' }, '管理者');
     await admin.fails('POST', '/api/nonclient-services/migrate', { client_id: clientId }, '對象單位');
+  });
+
+  // ---------------------------------------------------------------- 收費對帳
+  section('收費對帳（自動確認、人工佇列、三方勾稽、收據）');
+  await test('據點可設定法律主體與收據前綴', async () => {
+    const sites = await admin.ok('GET', '/api/sites');
+    const s0 = sites[0];
+    await admin.ok('PUT', `/api/sites/${s0.id}`, {
+      legal_entity: '冒煙心理諮商所有限公司', tax_id: '12345675',
+      receipt_prefix: 'SM', director: '冒煙負責人', pay_channel: 'LINE Pay 冒煙館', pay_account: 'SMOKE-001'
+    });
+    const after = (await admin.ok('GET', '/api/sites')).find(x => x.id === s0.id);
+    equal(after.legal_entity, '冒煙心理諮商所有限公司', '法律主體');
+    equal(after.receipt_prefix, 'SM', '收據前綴');
+  });
+  await test('收款會產生金流紀錄，並自動判定是否需人工處理', async () => {
+    const target = addDays(monday, 133);
+    const a = await admin.ok('POST', '/api/appointments',
+      { client_id: clientId, counselor_id: 2, date: target, start_time: '11:00', fee: 2000 });
+    await admin.ok('POST', `/api/appointments/${a.id}/status`, { status: 'done' });
+    const inv = (await admin.ok('GET', `/api/invoices?client_id=${clientId}&status=unpaid`))
+      .rows.find(x => x.appointment_id === a.id);
+    await admin.ok('POST', `/api/invoices/${inv.id}/pay`, { method: '現金' });
+    const pays = await admin.ok('GET', '/api/payments?size=200');
+    const p = pays.rows.find(x => x.invoice_id === inv.id);
+    assert(p, '收款應留下金流紀錄');
+    equal(p.amount, inv.amount, '入帳金額');
+    equal(p.status, 'settled', '入帳狀態');
+  });
+  await test('人工佇列列出原因，且反向選取以全部結果為準', async () => {
+    // 造一筆有問題的：手動開單、沒有預約
+    const bad = await admin.ok('POST', '/api/invoices',
+      { client_id: clientId, date: monday, item: '冒煙異常單', amount: 0 });
+    await admin.ok('POST', '/api/reconcile/reclassify', { month: monday.slice(0, 7) });
+    const q = await admin.ok('GET', '/api/reconcile/queue?size=100');
+    const row = q.rows.find(x => x.id === bad.id);
+    assert(row, '異常單應進人工佇列');
+    assert(row.review_reason.includes('預約') || row.review_reason.includes('金額'), '應說明原因');
+    assert(Array.isArray(q.all_ids) && q.all_ids.length >= q.rows.length, '應回傳跨頁的全部 id 供反向選取');
+    // 批次標記已處理
+    const out = await admin.ok('POST', '/api/reconcile/batch', { ids: [bad.id], action: 'resolve', note: '確認為測試單' });
+    equal(out.done, 1, '批次處理筆數');
+    const after = await admin.ok('GET', '/api/reconcile/queue?size=100');
+    assert(!after.rows.some(x => x.id === bad.id), '處理後應離開佇列');
+    await admin.fails('POST', '/api/reconcile/batch', { ids: [], action: 'resolve' }, '選擇');
+  });
+  await test('三方勾稽：找出已完成沒開單、已收款沒入帳、金額不符', async () => {
+    const month = addDays(monday, 133).slice(0, 7);
+    const r = await admin.ok('GET', '/api/reconcile/report?month=' + month);
+    assert(Array.isArray(r.done_no_invoice), '應回傳已完成沒開單清單');
+    assert(Array.isArray(r.paid_no_payment), '應回傳已收款沒入帳清單');
+    assert(Array.isArray(r.by_site), '應回傳各主體收付對照');
+    // 製造一筆金額不符：多記一筆入帳
+    const inv = (await admin.ok('GET', `/api/invoices?client_id=${clientId}&status=paid&size=100`)).rows[0];
+    const extra = await admin.ok('POST', '/api/payments', { invoice_id: inv.id, amount: 1, method: '現金' });
+    const r2 = await admin.ok('GET', '/api/reconcile/report?month=' + inv.date.slice(0, 7));
+    assert(r2.amount_mismatch.some(x => x.id === inv.id), '應抓出入帳與收費單金額不符');
+    await admin.ok('DELETE', `/api/payments/${extra.id}`);
+  });
+  await test('收據雙版本：首次可印，補印必須填原因並留軌跡', async () => {
+    const inv = (await admin.ok('GET', `/api/invoices?client_id=${clientId}&status=paid&size=100`)).rows[0];
+    const first = await admin.ok('GET', `/api/invoices/${inv.id}/receipt-doc?variant=plain`);
+    equal(first.variant, 'plain', '無章版');
+    assert(first.entity, '應帶主體抬頭');
+    // 第二次沒填原因要被擋
+    await admin.fails('GET', `/api/invoices/${inv.id}/receipt-doc?variant=stamped`, undefined, '補印');
+    const second = await admin.ok('GET',
+      `/api/invoices/${inv.id}/receipt-doc?variant=stamped&reason=${encodeURIComponent('個案遺失')}`);
+    equal(second.variant, 'stamped', '含章版');
+    assert(second.stamp_note.includes('印花稅'), '含章版應註明印花稅總繳');
+    const log = await admin.ok('GET', `/api/invoices/${inv.id}/receipt-prints`);
+    assert(log.length >= 2 && log.some(x => x.reason === '個案遺失'), '補印應留軌跡與原因');
+  });
+  await test('收款連結依據點主體產生；未歸屬據點時擋下', async () => {
+    const unpaid = await admin.ok('POST', '/api/invoices',
+      { client_id: clientId, date: today0, item: '冒煙收款連結測試', amount: 1200 });
+    await admin.fails('POST', '/api/payment-links', { invoice_id: unpaid.id }, '據點');
+    const sites = await admin.ok('GET', '/api/sites');
+    await admin.ok('PUT', `/api/invoices/${unpaid.id}`, { site_id: sites[0].id });
+    const link = await admin.ok('POST', '/api/payment-links', { invoice_id: unpaid.id });
+    assert(link.token && link.url.includes(link.token), '應產生連結');
+    equal(link.site.legal_entity, '冒煙心理諮商所有限公司', '應帶該主體資訊');
+    const pub = await admin.ok('GET', `/api/public/pay/${link.token}`);
+    equal(pub.amount, 1200, '公開頁應顯示金額');
+    assert(!JSON.stringify(pub).includes('冒煙測試個案'), '公開頁不應洩漏個案姓名');
+  });
+  await test('月度明細匯出含指定欄位', async () => {
+    const r = await fetch(BASE + `/api/reconcile/export?month=${monday.slice(0, 7)}`,
+      { headers: { Cookie: adminCookie() } });
+    equal(r.status, 200, 'HTTP');
+    const text = await r.text();
+    for (const col of ['收據號碼', '支付方式', '專業人員', '單位營收', '專業人員營收', '據點', '法律主體', '分帳規則']) {
+      assert(text.includes(col), `匯出應含欄位「${col}」`);
+    }
   });
 
   // ---------------------------------------------------------------- 機構專案

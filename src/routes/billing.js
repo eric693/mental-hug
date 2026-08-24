@@ -3,6 +3,7 @@ const { db, audit, today, nowStamp, getSetting, listSetting, listQuery } = requi
 const { requireStaff } = require('../auth');
 const { sendNotification } = require('../notify');
 const split = require('../split');
+const reconcile = require('./reconcile');
 
 const router = express.Router();
 
@@ -84,6 +85,12 @@ router.post('/invoices/:id/pay', requireStaff('billing'), (req, res) => {
   if (!sp.ok) {
     audit('staff', req.user.id, req.user.name, '收款後未能自動拆帳', String(i.id), { reason: sp.reason });
   }
+  // 金流入帳：收款這件事本身要單獨留一筆，之後才能與收費單三方勾稽
+  db.prepare(`INSERT INTO payments (invoice_id, client_id, site_id, amount, method, channel, paid_at, created_by)
+    VALUES (?,?,?,?,?, 'manual', ?, ?)`).run(i.id, i.client_id, i.site_id || null, i.amount,
+    method, nowStamp(), req.user.id);
+  // 自動確認 vs 人工佇列
+  reconcile.classify(i.id);
   audit('staff', req.user.id, req.user.name, '收款', String(i.client_id), { id: i.id, amount: i.amount });
   res.json({ ok: true });
 });
@@ -98,11 +105,12 @@ router.put('/invoices/:id', requireStaff('billing'), (req, res) => {
   const subsidy = Math.min(Number(b.subsidy_amount) || 0, amount);
   db.prepare(`UPDATE invoices SET date = ?, item = ?, amount = ?, payer = ?, note = ?,
       buyer_tax_id = ?, buyer_title = ?, invoice_no = ?, invoice_date = ?, carrier = ?, love_code = ?,
-      subsidy_program = ?, subsidy_no = ?, subsidy_amount = ?, self_pay = ? WHERE id = ?`).run(
+      subsidy_program = ?, subsidy_no = ?, subsidy_amount = ?, self_pay = ?, site_id = ? WHERE id = ?`).run(
     b.date, b.item, amount, b.payer, b.note || '',
     (b.buyer_tax_id || '').trim(), b.buyer_title || '', (b.invoice_no || '').trim().toUpperCase(),
     b.invoice_date || '', (b.carrier || '').trim().toUpperCase(), (b.love_code || '').trim(),
-    b.subsidy_program || '', b.subsidy_no || '', subsidy, amount - subsidy, i.id);
+    b.subsidy_program || '', b.subsidy_no || '', subsidy, amount - subsidy,
+    Number(b.site_id) || i.site_id || null, i.id);
   audit('staff', req.user.id, req.user.name, '修改收費單', String(i.client_id), { id: i.id });
   res.json({ ok: true });
 });

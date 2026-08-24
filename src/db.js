@@ -440,6 +440,75 @@ CREATE TABLE IF NOT EXISTS user_sites (
 ensureColumns('rooms', { site_id: 'INTEGER REFERENCES sites(id)' });
 ensureColumns('appointments', { site_id: 'INTEGER REFERENCES sites(id)' });
 
+// ---- 收費、金流與對帳（M5）----
+// 六個據點分屬不同法律主體：收款帳號不同、收據抬頭不同、統編不同。
+// 入帳要自動歸屬到正確主體，收據也要開該主體的，否則帳務與稅務都對不起來。
+ensureColumns('sites', {
+  legal_entity: "TEXT NOT NULL DEFAULT ''",      // 法律主體全名（開立收據的抬頭）
+  tax_id: "TEXT NOT NULL DEFAULT ''",            // 該主體統一編號
+  license_no: "TEXT NOT NULL DEFAULT ''",        // 該館開業執照字號
+  director: "TEXT NOT NULL DEFAULT ''",          // 該館負責心理師
+  receipt_prefix: "TEXT NOT NULL DEFAULT ''",    // 收據號前綴（各主體獨立流水）
+  pay_channel: "TEXT NOT NULL DEFAULT ''",       // 收款通道名稱（如 LINE Pay 帳號別名）
+  pay_account: "TEXT NOT NULL DEFAULT ''",       // 收款帳號／商店代號
+  pay_link_base: "TEXT NOT NULL DEFAULT ''"      // 收款連結base（各主體自己的收款頁）
+});
+
+// 金流入帳：一張收費單可以有多筆（分次付、部分退），與收費單分開記
+db.exec(`CREATE TABLE IF NOT EXISTS payments (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  invoice_id INTEGER REFERENCES invoices(id) ON DELETE SET NULL,
+  client_id INTEGER REFERENCES clients(id) ON DELETE SET NULL,
+  site_id INTEGER REFERENCES sites(id),          -- 入帳主體
+  amount INTEGER NOT NULL DEFAULT 0,
+  method TEXT NOT NULL DEFAULT '',               -- 現金／實體刷卡／線上金流／政府補助方案／機構月結
+  channel TEXT NOT NULL DEFAULT '',              -- linepay／manual／transfer…
+  external_no TEXT NOT NULL DEFAULT '',          -- 金流商交易序號，對帳用
+  paid_at TEXT NOT NULL DEFAULT '',
+  status TEXT NOT NULL DEFAULT 'settled',        -- pending 待入帳 / settled 已入帳 / failed / refunded
+  note TEXT NOT NULL DEFAULT '',
+  created_by INTEGER REFERENCES users(id),
+  created_at TEXT NOT NULL DEFAULT (datetime('now','localtime'))
+);
+CREATE INDEX IF NOT EXISTS idx_pay_invoice ON payments(invoice_id);
+CREATE INDEX IF NOT EXISTS idx_pay_time ON payments(paid_at);
+
+-- 收款連結（各據點主體各自的收款頁；LINE Pay 憑證填入後可改為即時請求）
+CREATE TABLE IF NOT EXISTS payment_links (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  token TEXT NOT NULL UNIQUE,
+  invoice_id INTEGER REFERENCES invoices(id) ON DELETE CASCADE,
+  site_id INTEGER REFERENCES sites(id),
+  amount INTEGER NOT NULL DEFAULT 0,
+  status TEXT NOT NULL DEFAULT 'open',           -- open / paid / expired / void
+  expires_at TEXT NOT NULL DEFAULT '',
+  paid_at TEXT NOT NULL DEFAULT '',
+  created_by INTEGER REFERENCES users(id),
+  created_at TEXT NOT NULL DEFAULT (datetime('now','localtime'))
+);
+
+-- 收據列印軌跡：補印要留痕（M5-04）
+CREATE TABLE IF NOT EXISTS receipt_prints (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  invoice_id INTEGER NOT NULL REFERENCES invoices(id) ON DELETE CASCADE,
+  receipt_no TEXT NOT NULL DEFAULT '',
+  variant TEXT NOT NULL DEFAULT 'plain',         -- plain 無章／stamped 含發票章與印花稅總繳章
+  reason TEXT NOT NULL DEFAULT '',               -- 補印原因
+  user_id INTEGER REFERENCES users(id),
+  user_name TEXT NOT NULL DEFAULT '',
+  created_at TEXT NOT NULL DEFAULT (datetime('now','localtime'))
+);
+CREATE INDEX IF NOT EXISTS idx_rprint_inv ON receipt_prints(invoice_id);`);
+ensureColumns('invoices', {
+  site_id: 'INTEGER REFERENCES sites(id)',        // 入帳主體（由預約據點帶入）
+  // 自動確認 vs 人工佇列（M5-01）：到診且收款明確者自動入帳，其餘進佇列
+  review_state: "TEXT NOT NULL DEFAULT 'auto'",   // auto 自動確認 / pending 待人工確認 / resolved 已處理
+  review_reason: "TEXT NOT NULL DEFAULT ''",
+  reviewed_by: 'INTEGER REFERENCES users(id)',
+  reviewed_at: "TEXT NOT NULL DEFAULT ''"
+});
+
+
 // 前台可編輯文字（系統設定頁維護；清空即隱藏該區塊）
 const UI_TEXT_DEFAULTS = {
   ui_staff_login_title: '擁抱心理',
@@ -481,7 +550,7 @@ const UI_TEXT_KEYS = Object.keys(UI_TEXT_DEFAULTS);
     close_reasons: '目標達成,個案自行結束,轉介他處,失聯,搬遷,經濟因素,其他',
     risk_types: '自殺意念,自傷行為,傷人威脅,兒少保護,家庭暴力,性侵害,精神症狀惡化,其他',
     report_channels: '113保護專線,關懷e起來,自殺防治通報系統,警政單位,衛生局,醫療院所,學校,其他',
-    pay_methods: '現金,轉帳,信用卡,行動支付,其他',
+    pay_methods: '現金,實體刷卡,線上金流,轉帳,政府補助方案,機構月結,其他',
     payer_types: '自費,企業EAP,學校方案,社會局補助,心理健康支持方案,保險給付,其他',
     payer_type_default: '自費',
     // 責任通報時限：下列類型建案時自動帶出應完成通報時間，逾時未通報在危機清單警示

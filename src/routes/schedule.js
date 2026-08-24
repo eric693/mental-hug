@@ -324,9 +324,11 @@ router.put('/sites/:id', requireStaff('settings'), (req, res) => {
   if (!s) return res.status(404).json({ error: '找不到此據點' });
   const b = { ...s, ...req.body };
   db.prepare(`UPDATE sites SET name = ?, short_name = ?, address = ?, phone = ?, transport = ?,
-      note = ?, sort = ?, active = ? WHERE id = ?`)
+      note = ?, sort = ?, active = ?, legal_entity = ?, tax_id = ?, license_no = ?, director = ?,
+      receipt_prefix = ?, pay_channel = ?, pay_account = ?, pay_link_base = ? WHERE id = ?`)
     .run(b.name, b.short_name, b.address, b.phone, b.transport, b.note, Number(b.sort) || 0,
-      b.active ? 1 : 0, s.id);
+      b.active ? 1 : 0, b.legal_entity || '', b.tax_id || '', b.license_no || '', b.director || '',
+      b.receipt_prefix || '', b.pay_channel || '', b.pay_account || '', b.pay_link_base || '', s.id);
   audit('staff', req.user.id, req.user.name, '修改據點', String(s.id));
   res.json({ ok: true });
 });

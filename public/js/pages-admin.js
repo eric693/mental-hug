@@ -426,35 +426,8 @@ App.page('billing', {
         b.onclick = () => invoiceDialog(d.rows.find(x => x.id === Number(b.dataset.edit)), null, draw);
       });
       el.querySelectorAll('[data-r]').forEach(b => {
-        b.onclick = async () => {
-          const r = await GET(`/invoices/${b.dataset.r}/receipt`);
-          UI.modal({
-            title: '收據', hideFooter: true,
-            body: `<div style="font-size:14px;line-height:2">
-                <div style="text-align:center;font-size:18px;font-weight:700;margin-bottom:8px">
-                  ${UI.esc(r.center_name)}　收　據</div>
-                <div>收據號碼：${UI.esc(r.receipt_no || '-')}</div>
-                <div>個案編號：${UI.esc(r.client_code)}　　姓名：${UI.esc(r.client_name)}</div>
-                <div>服務項目：${UI.esc(r.item)}</div>
-                <div>金額：<strong style="font-size:17px">${UI.fmtMoney(r.amount)}</strong>
-                  （付款方式：${UI.esc(r.method || '-')}）</div>
-                ${r.subsidy_amount ? `<div>其中方案補助：${UI.fmtMoney(r.subsidy_amount)}　個案自付：${UI.fmtMoney(r.self_pay)}</div>
-                <div>補助方案：${UI.esc(r.subsidy_program)}${r.subsidy_no ? '（' + UI.esc(r.subsidy_no) + '）' : ''}</div>` : ''}
-                <div>付款人別：${UI.esc(r.payer)}</div>
-                <div>收款日期：${UI.esc(r.paid_at || r.date)}</div>
-                ${r.invoice_no ? `<div>發票號碼：${UI.esc(r.invoice_no)}${r.invoice_date ? '（' + UI.esc(r.invoice_date) + '）' : ''}
-                  ${r.buyer_tax_id ? '　買受人統編：' + UI.esc(r.buyer_tax_id) : ''}</div>` : ''}
-                ${r.buyer_title ? `<div>發票抬頭：${UI.esc(r.buyer_title)}</div>` : ''}
-                <div style="margin-top:14px;font-size:12.5px;color:var(--muted)">
-                  ${UI.esc(r.center_address || '')}　${UI.esc(r.center_phone || '')}
-                  ${r.center_tax_id ? '<br>統一編號：' + UI.esc(r.center_tax_id) : ''}
-                  ${r.center_license_no ? '<br>開業執照字號：' + UI.esc(r.center_license_no) : ''}
-                  ${r.center_director ? '　負責心理師：' + UI.esc(r.center_director) : ''}</div>
-                <div style="margin-top:22px">收款人：＿＿＿＿＿＿　　（諮商所用印）</div>
-              </div>
-              <button class="btn small secondary" style="margin-top:14px" onclick="window.print()">列印</button>`
-          });
-        };
+        // 收據有無章兩版，且補印要留軌跡，統一走 receiptDoc
+        b.onclick = () => receiptDoc(Number(b.dataset.r), 'plain');
       });
       el.querySelectorAll('[data-pay]').forEach(b => {
         b.onclick = () => UI.modal({
@@ -1101,6 +1074,14 @@ App.page('settings', {
       ${UI.input('sort', '排序', { type: 'number', value: st ? st.sort : 0 })}
       ${UI.input('address', '地址', { value: st ? st.address : '', full: true })}
       ${UI.textarea('transport', '交通方式（會印在對外預約頁與提醒訊息）', { value: st ? st.transport : '' })}
+      ${UI.input('legal_entity', '法律主體全名（收據抬頭）', { value: st ? st.legal_entity : '', full: true })}
+      ${UI.input('tax_id', '該主體統一編號', { value: st ? st.tax_id : '' })}
+      ${UI.input('license_no', '該館開業執照字號', { value: st ? st.license_no : '' })}
+      ${UI.input('director', '該館負責心理師', { value: st ? st.director : '' })}
+      ${UI.input('receipt_prefix', '收據號前綴（各主體獨立流水）', { value: st ? st.receipt_prefix : '' })}
+      ${UI.input('pay_channel', '收款通道（如 LINE Pay 帳號別名）', { value: st ? st.pay_channel : '' })}
+      ${UI.input('pay_account', '收款帳號／商店代號', { value: st ? st.pay_account : '' })}
+      ${UI.input('pay_link_base', '收款連結 base（該主體自己的收款頁）', { value: st ? st.pay_link_base : '', full: true })}
       ${UI.textarea('note', '備註', { value: st ? st.note : '' })}
       ${st ? UI.checkbox('active', '啟用', st.active) : ''}</div>`;
     sb.innerHTML = UI.table(['據點', '簡稱', '電話', '地址', '諮商室', '心理師', '狀態', ''], sites.map(x => `<tr>
