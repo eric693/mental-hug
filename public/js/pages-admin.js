@@ -883,6 +883,8 @@ App.page('users', {
         ${UI.input('license_expiry', '執業執照更新日', { type: 'date', value: u ? u.license_expiry : '' })}
         ${UI.input('specialty', '專長', { value: u ? u.specialty : '', full: true })}
         ${UI.inputList('contract_type', '合約類型', ['全職', '兼職', '合作（拆帳）', '實習'], { value: u ? (u.contract_type || '') : '' })}
+        ${UI.input('hire_date', '到職日（Ramp-up 起算）', { type: 'date', value: u ? (u.hire_date || '') : '' })}
+        ${UI.input('target_utilization', '個人目標利用率 %（0＝用全所預設）', { type: 'number', value: u ? (u.target_utilization || 0) : 0 })}
         ${UI.input('meeting_room_url', '固定視訊會議室連結', {
     value: u ? (u.meeting_room_url || '') : '', full: true,
     placeholder: 'https://meet.google.com/xxx-xxxx-xxx（排視訊晤談時自動帶入）'

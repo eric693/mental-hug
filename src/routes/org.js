@@ -296,7 +296,7 @@ router.get('/users', requireStaff('users'), (req, res) => {
 
 const USER_FIELDS = ['name', 'role', 'title', 'license_type', 'license_no', 'license_expiry', 'specialty',
   'phone', 'email', 'meeting_room_url', 'is_intern', 'supervisor_id',
-  'contract_type', 'default_rule_id'];
+  'contract_type', 'default_rule_id', 'hire_date', 'target_utilization'];
 
 router.post('/users', requireStaff('users'), (req, res) => {
   const b = req.body || {};

@@ -81,9 +81,9 @@ const App = {
   },
 
   navGroups: [
-    { label: '每日作業', keys: ['dashboard', 'my', 'calendar', 'schedule', 'myshift', 'waitlist', 'today', 'reminders', 'notes-pending', 'notes-review', 'inbox', 'messages', 'reschedule'] },
+    { label: '每日作業', keys: ['dashboard', 'my', 'calendar', 'schedule', 'myshift', 'availability-review', 'waitlist', 'today', 'reminders', 'notes-pending', 'notes-review', 'inbox', 'messages', 'reschedule'] },
     { label: '個案服務', keys: ['intake', 'intake-forms', 'clients', 'client-tiers', 'nonclient', 'groups', 'assessments', 'risk', 'safety', 'follow-ups', 'consents'] },
-    { label: '專業與營運', keys: ['supervision', 'hr', 'payouts', 'split-rules', 'settlement', 'billing', 'reconcile', 'finance', 'overdue', 'packages', 'projects', 'partners', 'announcements', 'reports'] },
+    { label: '專業與營運', keys: ['supervision', 'hr', 'rampup', 'payouts', 'split-rules', 'settlement', 'billing', 'reconcile', 'finance', 'overdue', 'packages', 'projects', 'partners', 'announcements', 'reports'] },
     { label: '系統', keys: ['users', 'settings', 'ai', 'line', 'print-batches', 'imports', 'retention', 'audit'] }
   ],
 

@@ -213,7 +213,12 @@ App.page('hr', {
           <td>${o.start_date}${o.end_date !== o.start_date ? ' ~ ' + o.end_date : ''}</td>
           <td>${o.all_day ? '全天' : `${o.start_time}-${o.end_time}`}</td>
           <td>${UI.esc(o.reason || '-')}</td>
-          <td><button class="btn tiny danger" data-do="${o.id}">刪除</button></td></tr>`), '目前沒有請假紀錄')}</div>
+          <td style="white-space:nowrap">
+            <button class="btn tiny ${o.resolved ? 'secondary' : ''}" data-imp="${o.id}">
+              ${o.resolved ? '已處理' : '受影響預約'}</button>
+            <button class="btn tiny danger" data-do="${o.id}">刪除</button></td></tr>`), '目前沒有請假紀錄')}
+        <div style="font-size:12.5px;color:var(--muted);margin-top:8px">
+          請假期間若已有預約，要逐案改期、換人或取消——排班表上留下無人負責的時段，個案會白跑一趟。</div></div>
       ${withCe ? `<div class="card"><h3>繼續教育明細</h3>
         ${UI.table(['日期', '心理師', '課程', '主辦', '類別', '時數', '積分', ''], list.map(c => `<tr>
           <td>${c.date}</td><td>${UI.esc(c.user_name)}</td><td>${UI.esc(c.title)}</td>
@@ -248,6 +253,9 @@ App.page('hr', {
         ${UI.input('cert_no', '證書字號')}
         ${UI.textarea('note', '備註')}</div>`,
       onSubmit: async e => { await POST('/ce-credits', UI.formData(e)); UI.toast('已登錄'); App.go('hr'); }
+    });
+    el.querySelectorAll('[data-imp]').forEach(b => {
+      b.onclick = () => timeOffImpact(Number(b.dataset.imp));
     });
     el.querySelectorAll('[data-do]').forEach(b => {
       b.onclick = async () => {
@@ -458,3 +466,73 @@ App.page('payouts', {
     await draw();
   }
 });
+
+// ---- 請假造成的預約異動（M3-03）----
+// 整段下架不是把時段關掉就好，已排的預約要逐案有結論。
+async function timeOffImpact(id) {
+  const d = await GET(`/time-off/${id}/impact`);
+  const t = d.time_off;
+  const render = () => `
+    <div class="notice ${d.rows.length ? 'warn' : 'ok'}" style="margin-bottom:10px">
+      ${UI.esc(t.counselor_name)}　${t.start_date}${t.end_date !== t.start_date ? ' ~ ' + t.end_date : ''}
+      ${t.all_day ? '（全天）' : `（${t.start_time}-${t.end_time}）`}
+      ${d.rows.length ? `：期間內有 <strong>${d.rows.length}</strong> 筆預約待處理`
+    : '：期間內沒有待處理的預約'}</div>
+    ${d.rows.length ? UI.table(['日期', '時間', '個案', '電話', '諮商室', ''], d.rows.map(a => `<tr>
+      <td>${a.date}</td><td>${a.start_time}-${a.end_time}</td>
+      <td><a href="#client/${a.client_id}">${UI.esc(a.client_name)}</a>
+        <div style="font-size:12px;color:var(--muted)">${UI.esc(a.client_code)}</div></td>
+      <td>${UI.esc(a.phone || '-')}</td>
+      <td>${UI.esc(a.room_name || '-')}</td>
+      <td style="white-space:nowrap">
+        <button class="btn tiny" data-re="${a.id}">改期</button>
+        <button class="btn tiny secondary" data-rs="${a.id}">換人</button>
+        <button class="btn tiny danger" data-cx="${a.id}">取消</button></td></tr>`)) : ''}`;
+
+  const m = UI.modal({
+    title: '請假期間的預約處理', wide: true, hideFooter: true,
+    body: render() + `<div class="no-print" style="margin-top:12px">
+      <button class="btn small secondary" id="finish">標記為已處理完畢</button></div>`
+  });
+
+  const refresh = async () => {
+    document.querySelectorAll('.modal-mask').forEach(x => x.remove());
+    timeOffImpact(id);
+  };
+  m.body.querySelectorAll('[data-re]').forEach(b => {
+    b.onclick = async () => {
+      const a = d.rows.find(x => x.id === Number(b.dataset.re));
+      apptDialog(a, refresh);
+    };
+  });
+  m.body.querySelectorAll('[data-rs]').forEach(b => {
+    b.onclick = () => UI.modal({
+      title: '改派給其他心理師',
+      body: `<div class="form-grid">${UI.select('counselor_id', '接手的心理師',
+    App.counselorOptions().filter(o => o[0] !== t.counselor_id))}</div>
+        <div style="font-size:12.5px;color:var(--muted);margin-top:8px">
+          系統會檢查對方在該時段是否已有預約或請假。</div>`,
+      onSubmit: async e => {
+        await POST(`/appointments/${b.dataset.rs}/reassign`, UI.formData(e));
+        UI.toast('已改派');
+        refresh();
+      }
+    });
+  });
+  m.body.querySelectorAll('[data-cx]').forEach(b => {
+    b.onclick = async () => {
+      if (!await UI.confirm('取消這筆預約？建議先與個案聯繫。')) return;
+      await POST(`/appointments/${b.dataset.cx}/status`, { status: 'cancelled', cancel_reason: '心理師請假' });
+      UI.toast('已取消');
+      refresh();
+    };
+  });
+  m.body.querySelector('#finish').onclick = async () => {
+    try {
+      await POST(`/time-off/${id}/resolve`, {});
+      UI.toast('已標記處理完畢');
+      m.close();
+      App.go('hr');
+    } catch (e) { UI.err(e); }
+  };
+}

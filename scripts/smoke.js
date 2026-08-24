@@ -1037,6 +1037,95 @@ function startServer() {
     await admin.fails('POST', '/api/nonclient-services/migrate', { client_id: clientId }, '對象單位');
   });
 
+  // ---------------------------------------------------------------- 排班與產能
+  section('可預約時段提交核定、產能與請假異動');
+  let subId;
+  await test('提交時段：合併重疊、算出每週時數、預設待核定', async () => {
+    const period = addDays(monday, 40).slice(0, 7);
+    const r = await lin.ok('POST', '/api/availability/submissions', {
+      period,
+      blocks: [
+        { weekday: 1, start_time: '09:00', end_time: '12:00' },
+        { weekday: 1, start_time: '11:00', end_time: '13:00' },   // 與上一段重疊，應合併為 09-13
+        { weekday: 3, start_time: '14:00', end_time: '17:00' },
+        { weekday: 9, start_time: '10:00', end_time: '11:00' },   // 無效星期，應忽略
+        { weekday: 5, start_time: '17:00', end_time: '16:00' }    // 起訖顛倒，應忽略
+      ]
+    });
+    subId = r.id;
+    const d = await admin.ok('GET', `/api/availability/submissions?period=${period}`);
+    const row = d.rows.find(x => x.id === subId);
+    equal(row.status, 'submitted', '預設待核定');
+    equal(row.blocks.length, 2, '重疊應合併、無效應忽略');
+    equal(row.weekly_hours, 7, '每週時數＝4＋3');
+    assert(Array.isArray(d.missing), '應列出尚未提交的心理師');
+    await lin.fails('POST', '/api/availability/submissions', { period, blocks: [] }, '至少提交');
+    await lin.fails('POST', '/api/availability/submissions', { period: '亂寫', blocks: [{ weekday: 1, start_time: '09:00', end_time: '10:00' }] }, '期間格式');
+  });
+  await test('只有核定後才成為可預約時段與產能分母', async () => {
+    const period = addDays(monday, 40).slice(0, 7);
+    const before = await admin.ok('GET', `/api/staffing/capacity?month=${period}`);
+    const cap0 = before.rows.find(u => u.id === 2).capacity_hours;
+    await lin.fails('POST', `/api/availability/submissions/${subId}/approve`, {}, '權限');
+    await admin.ok('POST', `/api/availability/submissions/${subId}/approve`, {});
+    const after = await admin.ok('GET', `/api/staffing/capacity?month=${period}`);
+    const u = after.rows.find(x => x.id === 2);
+    assert(u.capacity_hours > cap0, '核定後產能分母應增加');
+    assert(u.utilization === null || typeof u.utilization === 'number', '應算得出利用率');
+    // 核定過的不可刪除
+    await admin.fails('DELETE', `/api/availability/submissions/${subId}`, undefined, '不可刪除');
+  });
+  await test('退回要寫原因；重新送審會回到待核定', async () => {
+    const period = addDays(monday, 70).slice(0, 7);
+    const r = await lin.ok('POST', '/api/availability/submissions',
+      { period, blocks: [{ weekday: 2, start_time: '09:00', end_time: '11:00' }] });
+    await admin.fails('POST', `/api/availability/submissions/${r.id}/return`, { review_note: '' }, '退回原因');
+    await admin.ok('POST', `/api/availability/submissions/${r.id}/return`, { review_note: '週二上午要留給督導' });
+    let row = (await admin.ok('GET', `/api/availability/submissions?period=${period}`)).rows.find(x => x.id === r.id);
+    equal(row.status, 'returned', '退回後狀態');
+    equal(row.review_note, '週二上午要留給督導', '退回原因');
+    await lin.ok('POST', '/api/availability/submissions',
+      { period, blocks: [{ weekday: 4, start_time: '09:00', end_time: '11:00' }], resubmit: true });
+    row = (await admin.ok('GET', `/api/availability/submissions?period=${period}`)).rows.find(x => x.id === r.id);
+    equal(row.status, 'submitted', '重新送審後回到待核定');
+  });
+  await test('利用率：未到不計入分子', async () => {
+    const period = addDays(monday, 40).slice(0, 7);
+    const before = (await admin.ok('GET', `/api/staffing/capacity?month=${period}`)).rows.find(u => u.id === 2);
+    const d = addDays(monday, 41);
+    const a = await admin.ok('POST', '/api/appointments',
+      { client_id: clientId, counselor_id: 2, date: d, start_time: '19:00' });
+    await admin.ok('POST', `/api/appointments/${a.id}/status`, { status: 'no_show' });
+    const after = (await admin.ok('GET', `/api/staffing/capacity?month=${period}`)).rows.find(u => u.id === 2);
+    equal(after.done_hours, before.done_hours, '未到不應增加完成時數');
+  });
+  await test('請假：列出受影響預約，全部處理完才可結案', async () => {
+    const d1 = addDays(monday, 47);
+    const a = await admin.ok('POST', '/api/appointments',
+      { client_id: clientId, counselor_id: 2, date: d1, start_time: '15:00' });
+    const off = await admin.ok('POST', '/api/time-off',
+      { counselor_id: 2, start_date: d1, end_date: d1, all_day: 1, reason: '冒煙請假', force: true });
+    const imp = await admin.ok('GET', `/api/time-off/${off.id}/impact`);
+    assert(imp.rows.some(x => x.id === a.id), '應列出受影響的預約');
+    await admin.fails('POST', `/api/time-off/${off.id}/resolve`, {}, '未處理');
+    // 換人：改派給另一位心理師
+    await admin.ok('POST', `/api/appointments/${a.id}/reassign`, { counselor_id: 3 });
+    const imp2 = await admin.ok('GET', `/api/time-off/${off.id}/impact`);
+    equal(imp2.rows.length, 0, '改派後不應再列為受影響');
+    await admin.ok('POST', `/api/time-off/${off.id}/resolve`, {});
+    const imp3 = await admin.ok('GET', `/api/time-off/${off.id}/impact`);
+    equal(imp3.resolved, true, '應標記為已處理');
+  });
+  await test('Ramp-up：依到職日逐月追蹤利用率', async () => {
+    await admin.ok('PUT', '/api/users/2', { hire_date: addDays(monday, -120), target_utilization: 50 });
+    const d = await admin.ok('GET', '/api/staffing/rampup');
+    const u = d.rows.find(x => x.id === 2);
+    assert(u, '應列出有到職日的心理師');
+    assert(Array.isArray(u.months) && u.months.length >= 1, '應逐月列出');
+    assert(['done', 'ramping', 'over'].includes(u.status), '狀態');
+    equal(u.target, 50, '個人目標優先於全所預設');
+  });
+
   // ---------------------------------------------------------------- 收費對帳
   section('收費對帳（自動確認、人工佇列、三方勾稽、收據）');
   await test('據點可設定法律主體與收據前綴', async () => {

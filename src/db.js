@@ -440,6 +440,45 @@ CREATE TABLE IF NOT EXISTS user_sites (
 ensureColumns('rooms', { site_id: 'INTEGER REFERENCES sites(id)' });
 ensureColumns('appointments', { site_id: 'INTEGER REFERENCES sites(id)' });
 
+// ---- 可預約時段的提交與核定（M3-02）----
+// 「可排時段」是產能的分母：利用率、Ramp-up、據點排班都靠它。
+// 因此不能只是心理師自己在格子上點一點就算數——要按月／季提交，由排班負責人核定。
+// 核定過的版本才算數；心理師改了時段要重新送審，避免分母被無聲改動。
+db.exec(`CREATE TABLE IF NOT EXISTS availability_submissions (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  counselor_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  period TEXT NOT NULL,                        -- 2026-09（月）或 2026-Q4（季）
+  period_type TEXT NOT NULL DEFAULT 'month',   -- month / quarter
+  site_id INTEGER REFERENCES sites(id),        -- 多據點輪值：同一人不同據點各自送審
+  status TEXT NOT NULL DEFAULT 'draft',        -- draft 草稿 / submitted 待核定 / approved 已核定 / returned 退回
+  note TEXT NOT NULL DEFAULT '',
+  blocks TEXT NOT NULL DEFAULT '[]',           -- [{weekday,start_time,end_time}]
+  weekly_hours REAL NOT NULL DEFAULT 0,        -- 每週可排時數（產能分母的來源）
+  submitted_at TEXT NOT NULL DEFAULT '',
+  approved_by INTEGER REFERENCES users(id),
+  approved_at TEXT NOT NULL DEFAULT '',
+  review_note TEXT NOT NULL DEFAULT '',
+  created_at TEXT NOT NULL DEFAULT (datetime('now','localtime')),
+  UNIQUE(counselor_id, period, site_id)
+);
+CREATE INDEX IF NOT EXISTS idx_avsub ON availability_submissions(period, status);`);
+ensureColumns('availability', {
+  // 多據點輪值（M3-04）：同一人在不同據點有不同時段
+  site_id: 'INTEGER REFERENCES sites(id)',
+  submission_id: 'INTEGER REFERENCES availability_submissions(id)'
+});
+ensureColumns('users', {
+  hire_date: "TEXT NOT NULL DEFAULT ''",          // 到職日（Ramp-up 起算）
+  target_utilization: 'INTEGER NOT NULL DEFAULT 0' // 個人目標時段利用率（0＝用全所預設）
+});
+ensureColumns('time_off', {
+  // 請假造成的預約異動：處理完才算結案（M3-03）
+  resolved: 'INTEGER NOT NULL DEFAULT 0',
+  resolved_at: "TEXT NOT NULL DEFAULT ''",
+  site_id: 'INTEGER REFERENCES sites(id)'
+});
+
+
 // ---- 收費、金流與對帳（M5）----
 // 六個據點分屬不同法律主體：收款帳號不同、收據抬頭不同、統編不同。
 // 入帳要自動歸屬到正確主體，收據也要開該主體的，否則帳務與稅務都對不起來。
@@ -568,6 +607,9 @@ const UI_TEXT_KEYS = Object.keys(UI_TEXT_DEFAULTS);
     // 對外提醒發送：填入 webhook 後由系統送出，留空則僅產生訊息供人工發送
     notify_webhook_url: '',
     notify_webhook_token: '',
+    // 排班與產能
+    target_utilization: '70',           // 全所預設目標時段利用率（%）
+    rampup_months: '6',                 // Ramp-up 觀察期上限（月）
     supervision_required_hours: '20',   // 年度督導時數目標
     audit_retention_days: '1825',       // 心理紀錄相關稽核軌跡保留 5 年
     note_lock_days: '7',                // 晤談紀錄應於幾日內完成簽核
